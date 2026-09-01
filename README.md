@@ -1,6 +1,6 @@
 # Actual Play Engine
 
-Importable show-control engine for D&D actual plays. Theme and page chrome stay in each show app. This repo is the theatre computer: QLab, MIDI, combat, audience votes, HP, and a fire log.
+Importable show-control engine for D&D actual plays. Theme and page chrome stay in each show app. This repo is the theatre computer: QLab, MIDI, combat, audience votes, HP, a fire log, and a first-class 2D VTT.
 
 It is extracted from the Jun 2026 black-box show (`Actual_Play_Jun26`) and rewritten so a web click cannot report success unless QLab acked — or the operator sees `unconfirmed`.
 
@@ -8,9 +8,12 @@ It is extracted from the Jun 2026 black-box show (`Actual_Play_Jun26`) and rewri
 
 | Package | Import | Role |
 |---|---|---|
-| `@actualplay/engine` | `createEngine` | Framework-agnostic core |
+| `@actualplay/protocol` | command/event schemas | Browser-safe runtime validation |
+| `@actualplay/engine` | `createEngine` | Framework-agnostic core + VTT runtime |
 | `@actualplay/next` | `createActualPlayHandlers` | Next.js App Router routes, middleware, hooks |
+| `@actualplay/vtt` | `VttCanvas` | PixiJS canvas + snapshot client |
 | `@actualplay/bridge` | companion `.app` | MIDI host on the QLab Mac |
+| `@actualplay/vtt-reference` | `npm run dev:vtt` | Full director/player/broadcast console |
 
 ## Import into the next show
 
@@ -21,6 +24,7 @@ import { createActualPlayHandlers, actualPlayMiddleware } from '@actualplay/next
 export const engine = createEngine({
   store: sqliteStore('./data/show.db'),
   qlab: { host: '127.0.0.1', port: 53000 },
+  vtt: { enabled: true, assetRoot: './data/assets' },
   cues: {
     'show.welcome': '1',
     'show.end': '99',
