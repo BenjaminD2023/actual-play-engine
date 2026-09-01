@@ -10,7 +10,7 @@ npm run dev:vtt
 
 SQLite file: `apps/vtt-reference/data/show.db`. Assets: `apps/vtt-reference/data/assets`.
 
-Seed login: `admin` / `admin`.
+Seed logins: `admin` / `admin`, `dm` / `dm`, `p1` / `p1`, `p2` / `p2`, `audience` / `audience`.
 
 ## Migrations
 

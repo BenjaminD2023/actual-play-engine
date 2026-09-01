@@ -100,6 +100,22 @@ Repairs recorded here:
 - Phase N #58 asserts the shown handout id; Playwright `door.setState` expects 200; `runMigrations()` is the rollback test.
 - GET `/vtt/assets/:id` copies `Uint8Array.from(buffer)` so pooled Node Buffers do not pad a 70-byte PNG to 8192 bytes (`router.test.ts` asserts GET bytes equal the uploaded file). Verify after that fix: `{SCRATCH}/verify-asset-bytes.log`, next **7 passed**, Playwright **2 passed (10.8s)**.
 
+### Verify after viewport-lock and role-correct extra shots (`{SCRATCH}/verify-complete.log`)
+
+exit **0**. lint **ok**. protocol **3**. engine **59** (16 files). next **7**. bridge **2**. VTT client **5**. reference public-API **1**. simulate-show **1**. simulate-vtt **2**. Playwright **2 passed (11.7s)**.
+
+```
+{"seedMs":1131,"moveMs":4,"snapMs":2,"tokens":200,"walls":200}
+PHASE_N 70 PASS dropped QLab acknowledgement
+PHASE_N 71 PASS result is unconfirmed not ok
+PHASE_N_COVERED 1,2,…,69,72,…,91
+  ✓  1 tests/e2e/multiclient.spec.ts:46:5 › required views render a canvas or operator controls (3.1s)
+  ✓  2 tests/e2e/multiclient.spec.ts:87:5 › multi-client ownership, hidden JSON, and read-only views (7.6s)
+  2 passed (11.7s)
+```
+
+Check **92** is this `npm run verify`. Extra viewports are now captured as p1 / audience / operator, and projector/overlay snapshots assert `Lurker` is absent.
+
 ## Production-style scenario
 
 Shipped `npm run simulate-vtt` (`tests/vtt-simulate.test.ts`) against **SqliteStore** + `createEngine().vtt`, plus Playwright real clients (`multiclient.spec.ts`).
@@ -122,21 +138,27 @@ Preflight: Ready / Ready with warnings / Not ready, with OK/WARN/FAIL checks (da
 
 `npx playwright --version` → **1.62.1**. Production `next start` on :38480, Chrome.
 
-Inspected screenshots in `{SCRATCH}/views/` and `apps/vtt-reference/test-results/views/`:
+Reference boards are viewport-locked (`100dvh`, no document scroll on director/player/broadcast). Extra viewport shots in `multiclient.spec.ts` are taken from the **matching role** (p1, audience, operator), not from the admin smoke pass.
 
-| View | Notes |
-|---|---|
-| Director desktop | Live map, Lurker visible to DM |
-| Player desktop | Party tokens; hidden enemy omitted from raw JSON |
-| Prepare | Draft editor |
-| Audience | Poll surface |
-| Broadcast 16:9 / 1920×1080 | Read-only map |
-| Projector | Read-only |
-| Overlay | Transparent overlay route |
-| Operator mobile | Large controls, no canvas required |
-| Replay | Read-only banner + play control |
-| Preflight | Status badge + checklist |
-| Rehearsal | Dry-run controls |
+Inspected screenshots in `{SCRATCH}/views/` after the canvas/asset-byte and viewport-lock fixes:
+
+| File | Role | Notes |
+|---|---|---|
+| `director.png` / `desktop-director.png` | admin/DM | Square grid, fog rect, wall/door, Lurker (red) visible, scene library, map tools, inspector, QLab connected, panic |
+| `prepare.png` | admin | Grid calibration (square/hex/gridless), draft title, map tools |
+| `desktop-player.png` | p1 | Two party tokens only; **no Lurker**; Ranger HP 22/22 then 21/22 after −1 |
+| `player-tablet.png` | p1 @ 768×1024 | Canvas fills remaining viewport; Ranger 21/22; no Lurker |
+| `player-phone.png` | p1 @ 390×844 | Same projection; nav is a single scrolling row |
+| `audience.png` / `audience-phone.png` | audience | Vote Fight/Talk; no Open poll; no Lurker |
+| `broadcast-1080.png` / `broadcast-1920.png` | audience | Ranger/Cleric only; poll Fight:1 Talk:0; no prepare-live |
+| `projector-1920.png` | audience | Same read-only projection as broadcast; **no Lurker** in UI or raw JSON |
+| `overlay-1920.png` | audience | Ranger/Cleric only; **no Lurker** in UI or raw JSON |
+| `operator.png` / `operator-phone.png` | dm | Large touch targets: activate, preset, turns, rundown, poll, handout, QLab, panic |
+| `replay.png` | admin | Read-only banner (“Live session is not mutated”); play/pause/step/scrub; 9 events |
+| `preflight.png` | admin | **Ready with warnings** (MIDI token missing, no map asset); OK database/migrations/QLab dry-run/cues |
+| `rehearsal.png` | admin | Dry-run copy; scene library; map tools; panic |
+
+Admin visiting `/player` still sees Lurker (viewHiddenToken). That is not a leak: p1/audience/broadcast/projector/overlay snapshots stringify without `Lurker`.
 
 No unexplained page errors in the e2e run.
 
@@ -174,5 +196,6 @@ Bounds in `tests/vtt-perf.test.ts`: move < 500 ms, snapshot < 250 ms.
 - Shared notes are versioned documents, not a CRDT
 - Ephemeral presence uses in-memory HTTP/SSE (not a WebSocket server); it is not authoritative
 - 4K texture / GPU culling is not instrumented beyond the 200-token CPU fixture
+- Broadcast/projector 1920×1080 still shows a thin unused strip under the Pixi canvas (sidebar fills the column)
 
-No known P0, P1, or P2 after verify ×2 plus the final verify including the performance fixture.
+No known P0, P1, or P2 after verify ×2 plus the canvas/asset, viewport-lock, and role-correct screenshot pass.

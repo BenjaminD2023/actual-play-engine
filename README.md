@@ -116,6 +116,30 @@ This does not certify QLab, the LAN, or macOS. It does refuse to pretend a cue f
 ```bash
 cd actual-play-engine
 npm install
+npm run build
 npm test
 npm run simulate-show
+npm run simulate-vtt
+npm run verify
 ```
+
+## VTT reference console
+
+```bash
+npm run build
+npm run dev:vtt
+```
+
+Open `http://127.0.0.1:38480/login`. Seed users: `admin/admin`, `dm/dm`, `p1/p1`, `p2/p2`, `audience/audience`.
+
+Typical session:
+
+1. Sign in as `admin` and open Director.
+2. Click **prepare live show** (creates, publishes, instantiates, activates House map, places Ranger/Cleric/Lurker).
+3. Connect players on `/player`, audience on `/audience`, broadcast on `/broadcast`, projector on `/projector`, operator on `/operator`.
+4. Run **Preflight** before a dress. Use **Rehearsal** when QLab is dry-run.
+5. **Replay** reconstructs the session without mutating live state.
+
+QLab: dry-run is the default in the reference app. Point `createEngine({ qlab: { host, port } })` at a live workspace for dress rehearsal. MIDI uses `ACTION_CATALOG` through `POST /api/actualplay/midi/relay` and virtual-button press. Backup is the SQLite file `apps/vtt-reference/data/show.db` plus `data/assets`. Restore by replacing those files; migrations apply on next start.
+
+See `docs/VTT_ARCHITECTURE.md`, `docs/VTT_PROTOCOL.md`, `docs/VTT_SECURITY.md`, `docs/VTT_OPERATIONS.md`, `docs/VTT_TESTING.md`.

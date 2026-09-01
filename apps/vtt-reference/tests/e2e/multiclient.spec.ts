@@ -142,6 +142,8 @@ test('multi-client ownership, hidden JSON, and read-only views', async ({ browse
   await login(projPage, 'audience', 'audience');
   await projPage.goto('/projector');
   await expect(projPage.getByTestId('view-title')).toHaveText('Projector');
+  const projSnap = await vttJson(projPage, '/vtt/snapshot');
+  expect(JSON.stringify(projSnap.body)).not.toContain('Lurker');
 
   const opPage = await operator.newPage();
   await login(opPage, 'dm', 'dm');
@@ -227,6 +229,35 @@ test('multi-client ownership, hidden JSON, and read-only views', async ({ browse
   await bcPage.goto('/broadcast');
   await expect(bcPage.getByTestId('broadcast-overlay')).toBeVisible();
   await bcPage.screenshot({ path: path.join(shotDir, 'broadcast-1920.png') });
+
+  await p1Page.setViewportSize({ width: 768, height: 1024 });
+  await p1Page.goto('/player');
+  await expect(p1Page.getByTestId('view-title')).toHaveText('Player view');
+  await p1Page.screenshot({ path: path.join(shotDir, 'player-tablet.png'), fullPage: false });
+  await p1Page.setViewportSize({ width: 390, height: 844 });
+  await p1Page.goto('/player');
+  await p1Page.screenshot({ path: path.join(shotDir, 'player-phone.png'), fullPage: false });
+
+  await audPage.setViewportSize({ width: 390, height: 844 });
+  await audPage.goto('/audience');
+  await expect(audPage.getByTestId('view-title')).toHaveText('Audience view');
+  await audPage.screenshot({ path: path.join(shotDir, 'audience-phone.png'), fullPage: false });
+
+  await projPage.setViewportSize({ width: 1920, height: 1080 });
+  await projPage.goto('/projector');
+  await projPage.screenshot({ path: path.join(shotDir, 'projector-1920.png'), fullPage: false });
+
+  await audPage.setViewportSize({ width: 1920, height: 1080 });
+  await audPage.goto('/overlay');
+  await expect(audPage.getByTestId('view-title')).toHaveText('Transparent overlay');
+  const overlaySnap = await vttJson(audPage, '/vtt/snapshot');
+  expect(JSON.stringify(overlaySnap.body)).not.toContain('Lurker');
+  await audPage.screenshot({ path: path.join(shotDir, 'overlay-1920.png'), fullPage: false });
+
+  await opPage.setViewportSize({ width: 390, height: 844 });
+  await opPage.goto('/operator');
+  await expect(opPage.getByTestId('view-title')).toHaveText('Mobile operator');
+  await opPage.screenshot({ path: path.join(shotDir, 'operator-phone.png'), fullPage: false });
 
   await dm.close();
   await p1.close();
