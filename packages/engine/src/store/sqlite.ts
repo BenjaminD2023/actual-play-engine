@@ -6,6 +6,7 @@ import { createId, nowIso } from '../ids.js';
 import { parseActionData, type MidiKeybind } from '../midi/protocol.js';
 import { normalizeShowCueMap, type ShowCueMap } from '../show/cues.js';
 import { ENGINE_SCHEMA } from './schema.js';
+import { runMigrations } from './migrations.js';
 import type {
   AuthUserRecord,
   EngineConfig,
@@ -41,6 +42,11 @@ export class SqliteStore implements EngineStore {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     this.db.exec(ENGINE_SCHEMA);
+    runMigrations(this.db);
+  }
+
+  get database(): Database.Database {
+    return this.db;
   }
 
   getConfig(): EngineConfig {

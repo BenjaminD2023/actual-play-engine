@@ -30,12 +30,14 @@ import type { QLabDriver, QLabNetworkConfig } from './qlab/types.js';
 import { ShowCues, type ShowCueMap } from './show/cues.js';
 import { memoryStore } from './store/memory.js';
 import type { EngineStore, PlayerRecord, PollOptionRecord, PollRecord } from './store/types.js';
+import { VttRuntime, type VttRuntimeOptions } from './vtt/runtime.js';
 
 export interface EngineOptions {
   store?: EngineStore;
   qlab?: QLabNetworkConfig | { dryRun: true };
   cues?: ShowCueMap;
   midiDedupeMs?: number;
+  vtt?: VttRuntimeOptions;
 }
 
 export class ActualPlayEngine {
@@ -44,6 +46,7 @@ export class ActualPlayEngine {
   qlab: QLabDriver;
   readonly cues: ShowCues;
   readonly commands: CommandBus;
+  readonly vtt: VttRuntime;
   private readonly midiDedupe: MidiDedupe;
 
   constructor(options: EngineOptions = {}) {
@@ -62,6 +65,7 @@ export class ActualPlayEngine {
       : new QLabSession(options.qlab ?? stored.qlab);
     this.commands = new CommandBus(this.qlab, this.cues, this.store, this.events);
     this.midiDedupe = new MidiDedupe(options.midiDedupeMs);
+    this.vtt = new VttRuntime(this, options.vtt ?? { enabled: false });
   }
 
   async start(): Promise<void> {
