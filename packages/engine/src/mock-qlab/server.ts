@@ -156,6 +156,28 @@ export class MockQLabServer {
       return { json: qlabReplyJson(address, 'ok', this.workspaces, this.workspaces[0]?.uniqueID) };
     }
 
+    if (address.endsWith('/cueLists') || address === '/cueLists') {
+      return {
+        json: qlabReplyJson(
+          address,
+          'ok',
+          [
+            {
+              uniqueID: 'list-1',
+              number: '',
+              name: 'Main Cue List',
+              type: 'Cue List',
+              cues: [
+                { uniqueID: 'c1', number: '1', name: 'Welcome', type: 'Audio' },
+                { uniqueID: 'c10', number: '10', name: 'Battle', type: 'Audio' },
+              ],
+            },
+          ],
+          this.workspaces[0]?.uniqueID
+        ),
+      };
+    }
+
     if (
       address.endsWith('/start') ||
       address.endsWith('/stop') ||

@@ -13,11 +13,15 @@ export class CommandBus {
   private recent = new Map<string, { at: number; result: CommandResult }>();
 
   constructor(
-    private readonly qlab: QLabDriver,
+    private qlab: QLabDriver,
     private readonly cues: ShowCues,
     private readonly store: EngineStore,
     private readonly events: EngineEventBus
   ) {}
+
+  setQLabDriver(qlab: QLabDriver): void {
+    this.qlab = qlab;
+  }
 
   async dispatch(command: EngineCommand): Promise<CommandResult> {
     const cached = this.recent.get(command.id);

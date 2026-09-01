@@ -14,9 +14,11 @@ export type {
   QLabHealth,
   QLabNetworkConfig,
   QLabCommandResult,
+  QLabCueInfo,
   QLabWorkspaceInfo,
   QLabAckStatus,
 } from './qlab/types.js';
+export { flattenQLabCues } from './qlab/cues.js';
 
 export { CommandBus } from './commands/bus.js';
 export type { EngineCommand, CommandResult, CommandMeta, CommandType, FireLogEntry } from './commands/types.js';

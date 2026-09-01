@@ -41,7 +41,7 @@ export interface EngineOptions {
 export class ActualPlayEngine {
   readonly events = new EngineEventBus();
   readonly store: EngineStore;
-  readonly qlab: QLabDriver;
+  qlab: QLabDriver;
   readonly cues: ShowCues;
   readonly commands: CommandBus;
   private readonly midiDedupe: MidiDedupe;
@@ -65,6 +65,23 @@ export class ActualPlayEngine {
   }
 
   async start(): Promise<void> {
+    try {
+      await this.qlab.start();
+    } catch (error) {
+      if (this.qlab.kind === 'dry-run') throw error;
+    }
+    this.events.emit('qlab.health', this.qlab.health());
+  }
+
+  async applyQLabConfig(config: QLabNetworkConfig | { dryRun: true }): Promise<void> {
+    await this.qlab.stop();
+    if (isDryRun(config)) {
+      this.qlab = new DryRunQLab();
+    } else {
+      this.store.setQLabConfig(config);
+      this.qlab = new QLabSession(config);
+    }
+    this.commands.setQLabDriver(this.qlab);
     await this.qlab.start();
     this.events.emit('qlab.health', this.qlab.health());
   }
@@ -76,7 +93,7 @@ export class ActualPlayEngine {
 
   health() {
     return {
-      qlab: this.qlab.health(),
+      qlab: { ...this.qlab.health(), kind: this.qlab.kind },
       cues: this.cues.list(),
     };
   }

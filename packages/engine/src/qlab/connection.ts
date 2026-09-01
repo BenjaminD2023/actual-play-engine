@@ -61,12 +61,17 @@ export class QLabTcpConnection {
 
       socket.on('connect', () => finish());
       socket.on('error', (err) => {
-        finish(
-          new QLabError(
-            'connect_failed',
-            `Cannot connect to QLab at ${this.config.host}:${this.config.port}: ${err.message}`
-          )
-        );
+        if (!settled) {
+          finish(
+            new QLabError(
+              'connect_failed',
+              `Cannot connect to QLab at ${this.config.host}:${this.config.port}: ${err.message}`
+            )
+          );
+          return;
+        }
+        this.connectedFlag = false;
+        this.socket = null;
       });
       socket.on('data', (data: Buffer) => this.handleData(data));
       socket.on('close', () => {
