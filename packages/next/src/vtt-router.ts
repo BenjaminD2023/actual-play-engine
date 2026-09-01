@@ -117,7 +117,13 @@ export async function handleVttRequest(
       if (!id) return json({ error: 'not_found', message: 'Asset id required' }, 404);
       const variant = (new URL(request.url).searchParams.get('variant') as 'original' | 'display' | 'thumb') || 'display';
       const file = vtt.assets.readById(id, variant);
-      return new Response(new Uint8Array(file.buffer), { headers: { 'content-type': file.mime } });
+      const bytes = Uint8Array.from(file.buffer);
+      return new Response(bytes, {
+        headers: {
+          'content-type': file.mime,
+          'content-length': String(bytes.byteLength),
+        },
+      });
     }
 
     if (head === 'commands' && method === 'POST') {

@@ -1,7 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createEngine, createId, nowIso } from '@actualplay/engine';
 import { bootstrapAdmin } from '../src/auth.js';
 import { handleActualPlayRequest } from '../src/router.js';
+
+const dirs: string[] = [];
+afterEach(() => {
+  while (dirs.length) {
+    const dir = dirs.pop();
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe('Next adapter router', () => {
   it('rejects unauthenticated cue fires and accepts an admin session', async () => {
@@ -164,6 +175,56 @@ describe('Next adapter router', () => {
     expect(pressed.status).toBe(200);
     const session = engine.store.getActiveSession()!;
     expect(engine.vtt.tables.listMarkers(session.id).some((row) => row.label === 'http-btn')).toBe(true);
+    await engine.stop();
+  });
+
+  it('serves uploaded map bytes, not a pooled Buffer ArrayBuffer', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vtt-asset-get-'));
+    dirs.push(dir);
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    expect(png.byteLength).toBeLessThan(100);
+    const engine = createEngine({
+      qlab: { dryRun: true },
+      cues: { 'show.welcome': '1' },
+      vtt: { enabled: true, assetRoot: dir },
+    });
+    await engine.start();
+    await bootstrapAdmin(engine, { username: 'admin', password: 'secret' });
+    const login = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: 'admin', password: 'secret' }),
+      }),
+      ['auth', 'login']
+    );
+    const cookie = login.headers.get('set-cookie') ?? '';
+    const uploaded = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/vtt/assets', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'map.png', mime: 'image/png', data: png.toString('base64') }),
+      }),
+      ['vtt', 'assets']
+    );
+    expect(uploaded.status).toBe(200);
+    const { asset } = (await uploaded.json()) as { asset: { id: string } };
+    const got = await handleActualPlayRequest(
+      engine,
+      new Request(`http://localhost/api/actualplay/vtt/assets/${asset.id}?variant=display`, {
+        headers: { cookie },
+      }),
+      ['vtt', 'assets', asset.id]
+    );
+    expect(got.status).toBe(200);
+    expect(got.headers.get('content-type')).toBe('image/png');
+    const body = Buffer.from(await got.arrayBuffer());
+    expect(body.byteLength).toBe(png.byteLength);
+    expect(body.equals(png)).toBe(true);
     await engine.stop();
   });
 });

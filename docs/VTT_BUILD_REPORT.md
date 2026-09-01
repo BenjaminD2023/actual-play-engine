@@ -98,6 +98,7 @@ Repairs recorded here:
 - Webhooks HMAC-sign, POST, and retry; deliveries recorded `ok`/`failed`.
 - Clients subscribe to `/vtt/stream` via `VttConnection` (Last-Event-ID + gap fill), not interval snapshot polling.
 - Phase N #58 asserts the shown handout id; Playwright `door.setState` expects 200; `runMigrations()` is the rollback test.
+- GET `/vtt/assets/:id` copies `Uint8Array.from(buffer)` so pooled Node Buffers do not pad a 70-byte PNG to 8192 bytes (`router.test.ts` asserts GET bytes equal the uploaded file). Verify after that fix: `{SCRATCH}/verify-asset-bytes.log`, next **7 passed**, Playwright **2 passed (10.8s)**.
 
 ## Production-style scenario
 
