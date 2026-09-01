@@ -482,19 +482,25 @@ export class SqliteVttTables implements VttTables {
       row.id,
       row.url,
       row.secret_hash,
-      JSON.stringify(row.events),
+      JSON.stringify({ events: row.events, secret: row.secret ?? '' }),
       row.created_at
     );
     return row;
   }
   listWebhooks(): WebhookRow[] {
-    return (this.db.prepare(`SELECT * FROM vtt_webhooks`).all() as Record<string, unknown>[]).map((row) => ({
-      id: String(row.id),
-      url: String(row.url),
-      secret_hash: String(row.secret_hash),
-      events: parse(String(row.events_json)),
-      created_at: String(row.created_at),
-    }));
+    return (this.db.prepare(`SELECT * FROM vtt_webhooks`).all() as Record<string, unknown>[]).map((row) => {
+      const parsed = parse<string[] | { events: string[]; secret?: string }>(String(row.events_json));
+      const events = Array.isArray(parsed) ? parsed : parsed.events;
+      const secret = Array.isArray(parsed) ? '' : parsed.secret ?? '';
+      return {
+        id: String(row.id),
+        url: String(row.url),
+        secret_hash: String(row.secret_hash),
+        secret,
+        events,
+        created_at: String(row.created_at),
+      };
+    });
   }
   recordDelivery(id: string, webhookId: string, eventType: string, status: string, attempts: number, lastError: string | null): void {
     this.db

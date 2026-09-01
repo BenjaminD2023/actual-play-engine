@@ -134,6 +134,7 @@ export interface WebhookRow {
   id: string;
   url: string;
   secret_hash: string;
+  secret?: string;
   events: string[];
   created_at: string;
 }

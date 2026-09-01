@@ -88,7 +88,7 @@ export function checksumSql(sql: string): string {
   return createHash('sha256').update(sql).digest('hex');
 }
 
-export function runMigrations(db: Database.Database): MigrationReport {
+export function runMigrations(db: Database.Database, migrations: Migration[] = MIGRATIONS): MigrationReport {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id TEXT PRIMARY KEY,
     checksum TEXT NOT NULL,
@@ -115,7 +115,7 @@ export function runMigrations(db: Database.Database): MigrationReport {
     report.checksums['001_baseline'] = checksum;
   }
 
-  for (const migration of MIGRATIONS) {
+  for (const migration of migrations) {
     const checksum = checksumSql(migration.sql);
     report.checksums[migration.id] = checksum;
     if (applied.has(migration.id)) continue;

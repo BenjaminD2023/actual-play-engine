@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { ProtocolError } from '@actualplay/protocol';
 import { harness } from './vtt-helpers.js';
@@ -75,6 +76,9 @@ describe('VTT domain', () => {
     expect(JSON.stringify(h.vtt.snapshot(h.session.id, broadcast, instanceId))).not.toContain('Lurker');
     const projector = h.vtt.actorFrom({ userId: null, role: 'system', viewer: 'projector' });
     expect(JSON.stringify(h.vtt.snapshot(h.session.id, projector, instanceId))).not.toContain('Lurker');
+    await expect(
+      h.vtt.execute(h.cmd('poll.open', { question: 'Nope', options: ['A', 'B'] }), h.audience)
+    ).rejects.toMatchObject({ code: 'forbidden' });
     await h.engine.stop();
   });
 
@@ -129,5 +133,40 @@ describe('VTT domain', () => {
     expect(h.vtt.tables.getInstance(instanceId)!.state.fog).toHaveLength(1);
     expect(h.vtt.replay(h.session.id).some((frame) => frame.type === 'vtt.checkpoint.restored')).toBe(true);
     await h.engine.stop();
+  });
+
+  it('HMAC-signs webhook deliveries and retries a failed POST', async () => {
+    const hits: Array<{ sig: string; body: string }> = [];
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk) => chunks.push(chunk as Buffer));
+      req.on('end', () => {
+        hits.push({
+          sig: String(req.headers['x-actualplay-signature'] ?? ''),
+          body: Buffer.concat(chunks).toString('utf8'),
+        });
+        if (hits.length < 2) {
+          res.statusCode = 500;
+          res.end('no');
+          return;
+        }
+        res.statusCode = 200;
+        res.end('ok');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const h = await harness();
+    const secret = 'hook-secret';
+    h.vtt.createWebhook(`http://127.0.0.1:${port}/hook`, secret, ['*']);
+    await h.vtt.execute(h.cmd('scene.create', { title: 'Hooked' }), h.dm);
+    expect(hits.length).toBe(2);
+    expect(hits[1]?.sig).toBe(h.vtt.signWebhook(hits[1]!.body, secret));
+    const delivery = h.vtt.tables.listDeliveries()[0];
+    expect(delivery?.status).toBe('ok');
+    expect(delivery?.attempts).toBe(2);
+    await h.engine.stop();
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   });
 });

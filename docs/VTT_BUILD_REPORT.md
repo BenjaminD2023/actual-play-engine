@@ -84,6 +84,21 @@ PHASE_N 71 PASS result is unconfirmed not ok
 
 Check **92** is this `npm run verify`.
 
+### Verify after skeptic repairs (`{SCRATCH}/verify-skeptic.log`)
+
+exit **0**. Engine **59 passed**. Next **6**. VTT client **5**. Playwright **2 passed (11.8s)**.
+
+Repairs recorded here:
+
+- Hex-flat / hex-pointy draw hex cells (`gridDrawModel`); fog/terrain use stored polygons; `mapAssetId` loads `/vtt/assets/:id`.
+- Canvas pan (drag empty), wheel zoom, pinch zoom; ping / ruler / drag-preview on the selection layer.
+- Director / Prepare / Rehearsal have scene library, grid calibration, wall/door/light/fog/camera, inspector, QLab, rundown, panic.
+- Operator: activate scene, run preset, show/hide handout, QLab status, panic, connection-loss warning.
+- Audience cannot `poll.open` / `poll.close`; votes stay on `/polls/:id/vote`.
+- Webhooks HMAC-sign, POST, and retry; deliveries recorded `ok`/`failed`.
+- Clients subscribe to `/vtt/stream` via `VttConnection` (Last-Event-ID + gap fill), not interval snapshot polling.
+- Phase N #58 asserts the shown handout id; Playwright `door.setState` expects 200; `runMigrations()` is the rollback test.
+
 ## Production-style scenario
 
 Shipped `npm run simulate-vtt` (`tests/vtt-simulate.test.ts`) against **SqliteStore** + `createEngine().vtt`, plus Playwright real clients (`multiclient.spec.ts`).

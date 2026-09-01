@@ -16,7 +16,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
-export function useVttSnapshot(pollMs = 2000) {
+export function useVttSnapshot(_pollMs = 2000) {
   const [snapshot, setSnapshot] = useState<VttSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(async () => {
@@ -29,9 +29,15 @@ export function useVttSnapshot(pollMs = 2000) {
   }, []);
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), pollMs);
-    return () => clearInterval(timer);
-  }, [pollMs, refresh]);
+    const source = new EventSource(`${API}/vtt/stream`);
+    source.onmessage = () => {
+      void refresh();
+    };
+    source.onerror = () => {
+      void refresh();
+    };
+    return () => source.close();
+  }, [refresh]);
   return { snapshot, error, refresh };
 }
 

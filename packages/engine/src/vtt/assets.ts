@@ -87,4 +87,10 @@ export class AssetService {
     }
     return fs.readFileSync(resolved);
   }
+
+  readById(id: string, variant: 'original' | 'display' | 'thumb' = 'display'): { buffer: Buffer; mime: string } {
+    const asset = this.tables.getAsset(id);
+    if (!asset) throw new ProtocolError('asset_missing', 'Asset was not found.');
+    return { buffer: this.read(asset.hash, variant), mime: asset.mime };
+  }
 }

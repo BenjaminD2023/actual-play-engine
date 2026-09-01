@@ -65,6 +65,61 @@ export async function handleVttRequest(
       return json({ events: vtt.eventsSince(sessionId, after) });
     }
 
+    if (head === 'stream' && method === 'GET') {
+      if (!user) return json({ error: 'unauthenticated', message: 'Authentication required' }, 401);
+      const last = Number(request.headers.get('last-event-id') ?? '0');
+      const encoder = new TextEncoder();
+      let lastSent = last;
+      const stream = new ReadableStream({
+        start(controller) {
+          const send = (event: unknown, id: number) => {
+            controller.enqueue(encoder.encode(`id: ${id}\ndata: ${JSON.stringify(event)}\n\n`));
+          };
+          const replay = vtt.eventsSince(sessionId, last);
+          send({ type: 'hello', lastEventSequence: vtt.tables.lastSequence(sessionId), replay }, last);
+          const unsubscribe = engine.events.subscribe(() => {
+            const events = vtt.eventsSince(sessionId, lastSent);
+            for (const event of events) {
+              lastSent = event.sequence;
+              send({ type: 'vtt.event', event }, event.sequence);
+            }
+          });
+          const heartbeat = setInterval(() => send({ type: 'ping' }, lastSent), 15000);
+          const close = () => {
+            clearInterval(heartbeat);
+            unsubscribe();
+            try {
+              controller.close();
+            } catch {
+              /* already closed */
+            }
+          };
+          request.signal.addEventListener('abort', close);
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        },
+      });
+    }
+
+    if (head === 'library' && method === 'GET') {
+      if (!user) return json({ error: 'unauthenticated', message: 'Authentication required' }, 401);
+      return json(vtt.library(sessionId));
+    }
+
+    if (head === 'assets' && method === 'GET') {
+      if (!user) return json({ error: 'unauthenticated', message: 'Authentication required' }, 401);
+      const id = tail[0];
+      if (!id) return json({ error: 'not_found', message: 'Asset id required' }, 404);
+      const variant = (new URL(request.url).searchParams.get('variant') as 'original' | 'display' | 'thumb') || 'display';
+      const file = vtt.assets.readById(id, variant);
+      return new Response(new Uint8Array(file.buffer), { headers: { 'content-type': file.mime } });
+    }
+
     if (head === 'commands' && method === 'POST') {
       if (!user) return json({ error: 'unauthenticated', message: 'Authentication required' }, 401);
       const body = await request.json();

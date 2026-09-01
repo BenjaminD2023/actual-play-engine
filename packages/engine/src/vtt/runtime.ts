@@ -147,7 +147,7 @@ export class VttRuntime {
     if (!this.enabled) throw new ProtocolError('unavailable', 'VTT is disabled on this engine.');
     if (isReadOnlyViewer(actor.viewer) && typeof raw === 'object' && raw && 'type' in raw) {
       const type = String((raw as { type: string }).type);
-      if (!type.startsWith('poll.') && type !== 'ping.create') {
+      if (type !== 'ping.create') {
         throw new ProtocolError('forbidden', 'This credential is read-only.');
       }
     }
@@ -175,7 +175,7 @@ export class VttRuntime {
       status: outcome.ok ? 'ok' : 'error',
       created_at: nowIso(),
     });
-    this.fanoutWebhooks(envelope.type, outcome.result);
+    await this.fanoutWebhooks(envelope.type, outcome.result);
     return outcome;
   }
 
@@ -759,6 +759,7 @@ export class VttRuntime {
   }
 
   private poll(envelope: CommandEnvelope, actor: ActorContext): CommandOutcome {
+    assertCapability(actor.capabilities, 'runShowPreset');
     if (envelope.type === 'poll.open') {
       const poll = this.engine.openPoll({
         question: envelope.payload.question,
@@ -912,7 +913,35 @@ export class VttRuntime {
   }
 
   createWebhook(url: string, secret: string, events: string[]) {
-    return this.tables.putWebhook({ id: createId(), url, secret_hash: hashBridgeToken(secret), events, created_at: stamp() });
+    return this.tables.putWebhook({
+      id: createId(),
+      url,
+      secret_hash: hashBridgeToken(secret),
+      secret,
+      events,
+      created_at: stamp(),
+    });
+  }
+
+  library(sessionId: string) {
+    return {
+      scenes: this.tables.listScenes('default').map((scene) => ({
+        id: scene.id,
+        title: scene.title,
+        status: scene.status,
+        version: scene.version,
+      })),
+      instances: this.tables.listInstances(sessionId).map((instance) => ({
+        id: instance.id,
+        status: instance.status,
+        sceneId: instance.scene_id,
+        title: instance.state.title,
+      })),
+      presets: this.tables.listPresets().map((preset) => ({ id: preset.id, name: preset.name })),
+      handouts: this.tables.listHandouts().map((handout) => ({ id: handout.id, title: handout.title })),
+      rundown: this.tables.listRundown(sessionId),
+      qlab: this.engine.health().qlab,
+    };
   }
 
   uploadAsset(buffer: Buffer, name: string, actor: ActorContext, mime?: string) {
@@ -1174,11 +1203,37 @@ export class VttRuntime {
     return createHmac('sha256', secret).update(body).digest('hex');
   }
 
-  private fanoutWebhooks(type: string, payload: Record<string, unknown>): void {
+  private async fanoutWebhooks(type: string, payload: Record<string, unknown>): Promise<void> {
+    const body = JSON.stringify({ type, payload, at: nowIso() });
     for (const hook of this.tables.listWebhooks()) {
-      if (hook.events.length && !hook.events.includes(type)) continue;
-      this.tables.recordDelivery(createId(), hook.id, type, 'queued', 1, null);
-      void payload;
+      if (hook.events.length && !hook.events.includes(type) && !hook.events.includes('*')) continue;
+      const secret = hook.secret ?? '';
+      const signature = this.signWebhook(body, secret);
+      let status = 'queued';
+      let attempts = 0;
+      let lastError: string | null = null;
+      while (attempts < 3 && status !== 'ok') {
+        attempts += 1;
+        try {
+          const response = await fetch(hook.url, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-actualplay-signature': signature,
+            },
+            body,
+          });
+          if (response.ok) status = 'ok';
+          else {
+            status = 'failed';
+            lastError = `HTTP ${response.status}`;
+          }
+        } catch (error) {
+          status = 'failed';
+          lastError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      this.tables.recordDelivery(createId(), hook.id, type, status, attempts, lastError);
     }
   }
 

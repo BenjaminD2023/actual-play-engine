@@ -157,11 +157,11 @@ test('multi-client ownership, hidden JSON, and read-only views', async ({ browse
   const afterSeq = ((await vttJson(dmPage, '/vtt/snapshot')).body as { lastEventSequence?: number }).lastEventSequence ?? 0;
   const fog = await vttCommand(dmPage, 'fog.reveal', { shape: 'rect', points: [{ x: 0, y: 0 }, { x: 80, y: 80 }] });
   expect(fog.status).toBe(200);
-  const doorState = await vttCommand(dmPage, 'door.setState', {
-    doorId: ((dmSnap.body as { live?: { doors?: Array<{ id: string }> } }).live?.doors ?? [])[0]?.id ?? 'missing',
-    state: 'open',
-  });
-  expect([200, 400, 404]).toContain(doorState.status);
+  const liveSnap = await vttJson(dmPage, '/vtt/snapshot');
+  const doorId = ((liveSnap.body as { live?: { doors?: Array<{ id: string }> } }).live?.doors ?? [])[0]?.id;
+  expect(doorId).toBeTruthy();
+  const doorState = await vttCommand(dmPage, 'door.setState', { doorId, state: 'open' });
+  expect(doorState.status).toBe(200);
 
   await p1Page.getByRole('button', { name: '-1' }).first().click();
   const hpAfter = await p1Page.evaluate(async () => {

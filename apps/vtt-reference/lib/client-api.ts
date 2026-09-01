@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VttSnapshot } from '@actualplay/protocol';
 import { PROTOCOL_VERSION } from '@actualplay/protocol';
+import { VttConnection } from '@actualplay/vtt';
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/actualplay${path}`, {
@@ -15,12 +16,14 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
-export function useVttSnapshot(pollMs = 2000) {
+export function useVttSnapshot(_pollMs = 2000) {
   const [snapshot, setSnapshot] = useState<VttSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const conn = useRef<VttConnection | null>(null);
+  if (!conn.current) conn.current = new VttConnection('/api/actualplay');
   const refresh = useCallback(async () => {
     try {
-      setSnapshot(await api<VttSnapshot>('/vtt/snapshot'));
+      setSnapshot(await conn.current!.loadSnapshot());
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -28,9 +31,10 @@ export function useVttSnapshot(pollMs = 2000) {
   }, []);
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), pollMs);
-    return () => clearInterval(timer);
-  }, [pollMs, refresh]);
+    return conn.current!.connect(() => {
+      void refresh();
+    });
+  }, [refresh]);
   return { snapshot, error, refresh };
 }
 
@@ -88,4 +92,19 @@ export async function adjustHp(playerId: string, delta: number) {
 
 export async function fetchSession() {
   return api<{ user: { id: string; username: string; role: string } | null }>('/auth/session');
+}
+
+export async function fetchLibrary() {
+  return api<{
+    scenes: Array<{ id: string; title: string; status: string; version: number }>;
+    instances: Array<{ id: string; status: string; sceneId: string; title: string }>;
+    presets: Array<{ id: string; name: string }>;
+    handouts: Array<{ id: string; title: string }>;
+    rundown: Array<{ id: string; title: string; state: string }>;
+    qlab: { connected?: boolean; lastError?: string | null; kind?: string; host?: string; port?: number };
+  }>('/vtt/library');
+}
+
+export async function panicQLab() {
+  return api('/qlab/panic', { method: 'POST', body: '{}' });
 }

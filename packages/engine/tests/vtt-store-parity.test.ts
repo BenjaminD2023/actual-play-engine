@@ -43,22 +43,17 @@ describe('VTT store parity and migrations', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vtt-fail-'));
     dirs.push(dir);
     const db = new Database(path.join(dir, 'fail.db'));
-    db.exec(`CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)`);
-    expect(() => {
-      db.exec('BEGIN');
-      try {
-        db.exec('CREATE TABLE ok (id TEXT)');
-        db.exec('THIS IS NOT SQL');
-        db.exec('COMMIT');
-      } catch (error) {
-        db.exec('ROLLBACK');
-        throw error;
-      }
-    }).toThrow();
-    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='ok'`).get();
-    expect(tables).toBeUndefined();
+    expect(() =>
+      runMigrations(db, [
+        { id: 'x_ok', sql: 'CREATE TABLE ok (id TEXT PRIMARY KEY)' },
+        { id: 'x_bad', sql: 'CREATE TABLE half (id TEXT); THIS IS NOT SQL' },
+      ])
+    ).toThrow();
+    const applied = db.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as { id: string }[];
+    expect(applied.map((row) => row.id)).toEqual(['x_ok']);
+    expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='ok'`).get()).toBeTruthy();
+    expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='half'`).get()).toBeUndefined();
     db.close();
-    void runMigrations;
   });
 
   it('shares scene create/publish/instantiate behavior on sqlite', async () => {

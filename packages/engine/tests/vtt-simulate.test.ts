@@ -292,8 +292,9 @@ describe('simulate-vtt production scenario', () => {
     mark(55, poll.question.includes('Hold'), 'open poll');
     mark(56, h.engine.store.listPollOptions(poll.id)[0]!.vote_count >= 1, 'audience votes');
     mark(57, h.engine.store.listPollOptions(poll.id).reduce((sum, row) => sum + row.vote_count, 0) >= 1, 'poll results');
-    await h.vtt.execute(h.cmd('handout.show', { handoutId: h.vtt.tables.listHandouts()[0]!.id }), h.dm);
-    mark(58, (h.vtt.tables.getInstance(instanceId)!.state.visibleHandoutIds.length ?? 0) >= 0, 'display handout');
+    const shownHandoutId = h.vtt.tables.listHandouts()[0]!.id;
+    await h.vtt.execute(h.cmd('handout.show', { handoutId: shownHandoutId }), h.dm);
+    mark(58, h.vtt.tables.getInstance(instanceId)!.state.visibleHandoutIds.includes(shownHandoutId), 'display handout');
     await h.vtt.execute(h.cmd('rundown.advance', {}), operator);
     mark(59, h.vtt.tables.listRundown(h.session.id).some((item) => item.state === 'live' || item.state === 'completed'), 'advance rundown from operator');
 
