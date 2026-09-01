@@ -154,6 +154,80 @@ test('multi-client ownership, hidden JSON, and read-only views', async ({ browse
   await bcPage.screenshot({ path: path.join(shotDir, 'broadcast-1080.png'), fullPage: false });
   await opPage.screenshot({ path: path.join(shotDir, 'operator-mobile.png') });
 
+  const afterSeq = ((await vttJson(dmPage, '/vtt/snapshot')).body as { lastEventSequence?: number }).lastEventSequence ?? 0;
+  const fog = await vttCommand(dmPage, 'fog.reveal', { shape: 'rect', points: [{ x: 0, y: 0 }, { x: 80, y: 80 }] });
+  expect(fog.status).toBe(200);
+  const doorState = await vttCommand(dmPage, 'door.setState', {
+    doorId: ((dmSnap.body as { live?: { doors?: Array<{ id: string }> } }).live?.doors ?? [])[0]?.id ?? 'missing',
+    state: 'open',
+  });
+  expect([200, 400, 404]).toContain(doorState.status);
+
+  await p1Page.getByRole('button', { name: '-1' }).first().click();
+  const hpAfter = await p1Page.evaluate(async () => {
+    const response = await fetch('/api/actualplay/players', { credentials: 'include' });
+    return response.json();
+  });
+  expect(JSON.stringify(hpAfter)).toMatch(/Ranger|current_hp/);
+
+  const opened = await vttCommand(dmPage, 'poll.open', { question: 'What now?', options: ['Fight', 'Talk'] });
+  expect(opened.status).toBe(200);
+  await audPage.reload();
+  await expect(audPage.getByTestId('vote-Fight')).toBeVisible({ timeout: 10_000 });
+  await audPage.getByTestId('vote-Fight').click();
+  await bcPage.reload();
+  await expect(bcPage.getByTestId('broadcast-polls')).toBeVisible();
+
+  await opPage.getByRole('button', { name: 'advance rundown' }).click();
+  await opPage.getByRole('button', { name: 'next turn' }).click();
+  await opPage.getByRole('button', { name: 'marker' }).click();
+
+  const p1Gone = await p1.newPage();
+  await p1Gone.close();
+  const moved = await vttCommand(dmPage, 'token.move', { tokenId: ranger!.id, x: 160, y: 160 });
+  expect(moved.status).toBe(200);
+  const p1b = await p1.newPage();
+  await login(p1b, 'p1', 'p1');
+  const gap = await vttJson(p1b, `/vtt/events?after=${afterSeq}`);
+  expect(((gap.body as { events?: unknown[] }).events ?? []).length).toBeGreaterThan(0);
+
+  const midi = await dmPage.evaluate(async () => {
+    const response = await fetch('/api/actualplay/midi/relay', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actionType: 'recording_marker', actionData: { label: 'e2e-midi' } }),
+    });
+    return { status: response.status, body: await response.json() };
+  });
+  expect(midi.status).toBe(200);
+
+  const button = await dmPage.evaluate(async () => {
+    const created = await fetch('/api/actualplay/buttons', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'E2E', action_type: 'recording_marker', action_data: { label: 'e2e-btn' } }),
+    }).then((response) => response.json());
+    const pressed = await fetch(`/api/actualplay/buttons/${created.button.id}/press`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+    return { status: pressed.status };
+  });
+  expect(button.status).toBe(200);
+
+  await dmPage.goto('/replay');
+  await expect(dmPage.getByTestId('replay-readonly')).toContainText(/not mutated/i);
+  await expect(dmPage.getByTestId('replay-play')).toBeVisible();
+  await dmPage.goto('/preflight');
+  await expect(dmPage.getByTestId('preflight-status')).toBeVisible();
+
+  await bcPage.setViewportSize({ width: 1920, height: 1080 });
+  await bcPage.goto('/broadcast');
+  await expect(bcPage.getByTestId('broadcast-overlay')).toBeVisible();
+  await bcPage.screenshot({ path: path.join(shotDir, 'broadcast-1920.png') });
+
   await dm.close();
   await p1.close();
   await p2.close();

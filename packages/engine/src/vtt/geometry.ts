@@ -86,15 +86,12 @@ function direction(a: Point, b: Point, c: Point): number {
   return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
 }
 
-export function hasLineOfSight(from: Point, to: Point, walls: WallRecord[], doorsBlocked: Set<string>): boolean {
+export function hasLineOfSight(from: Point, to: Point, walls: WallRecord[], openDoorWallIds: Set<string>): boolean {
   for (const wall of walls) {
     if (!wall.blockingVision) continue;
-    if (wall.kind === 'window') continue;
-    if (wall.kind === 'guide') continue;
-    if (segmentsIntersect(from, to, wall.a, wall.b)) {
-      if (wall.id && doorsBlocked.has(wall.id) === false && wall.kind !== 'wall') continue;
-      return false;
-    }
+    if (wall.kind === 'window' || wall.kind === 'guide') continue;
+    if (openDoorWallIds.has(wall.id)) continue;
+    if (segmentsIntersect(from, to, wall.a, wall.b)) return false;
   }
   return true;
 }

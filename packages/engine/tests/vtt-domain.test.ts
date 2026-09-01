@@ -71,6 +71,10 @@ describe('VTT domain', () => {
     const playerSnap = h.vtt.snapshot(h.session.id, h.playerOne, instanceId);
     expect(JSON.stringify(playerSnap)).not.toContain('Lurker');
     expect(JSON.stringify(h.vtt.snapshot(h.session.id, h.dm, instanceId))).toContain('Lurker');
+    const broadcast = h.vtt.actorFrom({ userId: null, role: 'system', viewer: 'broadcast' });
+    expect(JSON.stringify(h.vtt.snapshot(h.session.id, broadcast, instanceId))).not.toContain('Lurker');
+    const projector = h.vtt.actorFrom({ userId: null, role: 'system', viewer: 'projector' });
+    expect(JSON.stringify(h.vtt.snapshot(h.session.id, projector, instanceId))).not.toContain('Lurker');
     await h.engine.stop();
   });
 

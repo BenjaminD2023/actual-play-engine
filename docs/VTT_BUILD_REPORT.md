@@ -71,24 +71,26 @@ stdout | tests/vtt-perf.test.ts
 
 Next adapter: **6 passed** (includes forged JSON cookie → 401, cross-origin VTT POST → 403, virtual-button catalog press).
 
+### Verify after Phase N expansion (`{SCRATCH}/verify-phase-n.log`)
+
+exit **0**. Engine **58 passed** (16 files). Next **6**. simulate-vtt **2**. Playwright **2 passed (12.8s)**.
+
+```
+PHASE_N_COVERED 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91
+PHASE_N 70 PASS dropped QLab acknowledgement
+PHASE_N 71 PASS result is unconfirmed not ok
+  2 passed (12.8s)
+```
+
+Check **92** is this `npm run verify`.
+
 ## Production-style scenario
 
-`npm run simulate-vtt` → `packages/engine/tests/vtt-simulate.test.ts` against **SqliteStore** + shipped `VttRuntime`:
+Shipped `npm run simulate-vtt` (`tests/vtt-simulate.test.ts`) against **SqliteStore** + `createEngine().vtt`, plus Playwright real clients (`multiclient.spec.ts`).
 
-- Gridless, hex-flat, hex-pointy, square
-- Map upload, publish (revision frozen), instantiate, stage, activate
-- Player tokens + hidden enemy `Lurker`
-- Walls, door, window, light, fog, annotation, template, terrain, condition, aura
-- Ownership: player one **cannot** move player two (`forbidden`)
-- Player raw snapshot JSON **omits** `Lurker`; DM snapshot includes it
-- Encounter spawn, combat turn, HP via existing `updatePlayerHp` (single authority)
-- Poll open + vote, handout, rundown, registered action + `ingestMidi('recording_marker')`
-- Durable command id replay (`duplicate: true`)
-- Checkpoint preview (`mutatesLive: false`) then restore (audited, fog rolled back)
-- Scene package export/import checksum
-- `replayAt` reconstruction with `liveMutated: false`
-- SQLite reopen restores players and scenes
-- Separate test: MockQLab `dropNext` → preset step status **`unconfirmed`**, not `ok`
+Every Phase N item 1–91 is asserted (`PHASE_N n PASS …` in `{SCRATCH}/production-scenario.log`). 70–71 are the MockQLab `dropNext` preset step. 32–33, 36–40, 55–61, 62–65, 83, 89 also run through separate browser contexts (DM, p1, p2, audience, broadcast, projector, operator).
+
+P1 repaired during this expansion: broadcast/projector snapshots treated `ownerUserId === null` as “this viewer owns the token”, which leaked hidden `Lurker` into raw JSON. Projection now requires a non-null user/player id. Open doors no longer block line of sight. Scene import applies the packaged document onto a new scene id.
 
 ## MIDI / virtual buttons
 

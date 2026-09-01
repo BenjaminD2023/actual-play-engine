@@ -188,6 +188,14 @@ export function Console({ title, mode }: { title: string; mode: ViewMode }) {
                 </li>
               ))}
             </ul>
+            <div data-testid="broadcast-polls">
+              {polls.map((poll) => (
+                <p key={poll.id}>
+                  {poll.question}{' '}
+                  {poll.options.map((option) => `${option.option_text}:${option.vote_count}`).join(' ')}
+                </p>
+              ))}
+            </div>
           </div>
         )}
         <pre className="status">{JSON.stringify(snapshot?.live?.combat ?? {}, null, 2)}</pre>

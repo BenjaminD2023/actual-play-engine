@@ -131,6 +131,7 @@ export class VttRuntime {
     const snap = projectInstance(instance, actor, {
       players: this.engine.store.listPlayers(sessionId),
       combat: { mode: game.combat_mode, round: game.round_number, currentTurn: game.current_turn },
+      initiative: this.engine.store.listInitiative(sessionId),
       lastEventSequence: this.tables.lastSequence(sessionId),
       assets: this.tables.listAssets(),
     });
@@ -463,6 +464,9 @@ export class VttRuntime {
     const title = String(envelope.payload.title ?? envelope.payload.name ?? 'Scene');
     const mode = envelope.payload.grid && typeof envelope.payload.grid === 'object' ? (envelope.payload.grid as { mode?: string }).mode : 'square';
     const draft = emptyDocument(title, mode === 'hex-flat' || mode === 'hex-pointy' || mode === 'gridless' ? mode : 'square');
+    if (envelope.payload.document && typeof envelope.payload.document === 'object') {
+      Object.assign(draft, structuredClone(envelope.payload.document));
+    }
     if (envelope.payload.mapAssetId) draft.mapAssetId = String(envelope.payload.mapAssetId);
     if (envelope.payload.animated) draft.animated = true;
     const row = this.tables.putScene({
@@ -612,6 +616,7 @@ export class VttRuntime {
         if (typeof envelope.payload.height === 'number') token.height = envelope.payload.height;
         if (typeof envelope.payload.rotation === 'number') token.rotation = envelope.payload.rotation;
         if (typeof envelope.payload.assetId === 'string') token.assetId = envelope.payload.assetId;
+        if (typeof envelope.payload.initiativeId === 'string') token.initiativeId = envelope.payload.initiativeId;
       }
       return { token };
     }, 'vtt.token.changed');
@@ -1113,6 +1118,7 @@ export class VttRuntime {
       {
         players: this.engine.store.listPlayers(sessionId),
         combat: { mode: game.combat_mode, round: game.round_number, currentTurn: game.current_turn },
+        initiative: this.engine.store.listInitiative(sessionId),
         lastEventSequence: at,
         assets: this.tables.listAssets(),
       }

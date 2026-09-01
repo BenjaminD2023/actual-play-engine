@@ -179,6 +179,9 @@ export class ActualPlayEngine {
     if (!button || !button.is_active) {
       throw new LivePlayError('not_found', `Virtual button ${id} is missing or inactive.`);
     }
+    if (this.vtt.enabled && isRegisteredAction(button.action_type)) {
+      return this.dispatchRegisteredAction(button.action_type, button.action_data, source);
+    }
     return this.ingestMidi({ actionType: button.action_type, actionData: button.action_data }, source);
   }
 

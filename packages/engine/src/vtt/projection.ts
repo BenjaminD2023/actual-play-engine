@@ -2,7 +2,7 @@ import type { ActorContext, ProjectedLiveScene, TokenRecord, VttSnapshot, Viewer
 import { PROTOCOL_VERSION } from '@actualplay/protocol';
 import { hasLineOfSight, inVisionCone } from './geometry.js';
 import type { InstanceRow } from './tables.js';
-import type { PlayerRecord } from '../store/types.js';
+import type { InitiativeRecord, PlayerRecord } from '../store/types.js';
 
 export function projectInstance(
   instance: InstanceRow | null,
@@ -10,6 +10,7 @@ export function projectInstance(
   extras: {
     players: PlayerRecord[];
     combat: { mode: boolean; round: number; currentTurn: number };
+    initiative?: InitiativeRecord[];
     lastEventSequence: number;
     assets: VttSnapshot['assets'];
   }
@@ -39,14 +40,17 @@ function projectLive(
   extras: {
     players: PlayerRecord[];
     combat: { mode: boolean; round: number; currentTurn: number };
+    initiative?: InitiativeRecord[];
   },
   canSeeHidden: boolean
 ): ProjectedLiveScene {
   const state = structuredClone(instance.state);
-  const observer = state.tokens.find((token) => token.ownerUserId === actor.userId || token.playerId === actor.playerId);
-  const blockedWalls = new Set(
-    state.doors.filter((door) => door.state !== 'open' && !door.secret).map((door) => door.wallId)
+  const observer = state.tokens.find(
+    (token) =>
+      (Boolean(actor.userId) && token.ownerUserId === actor.userId) ||
+      (Boolean(actor.playerId) && token.playerId === actor.playerId)
   );
+  const openDoorWalls = new Set(state.doors.filter((door) => door.state === 'open').map((door) => door.wallId));
   const visionWalls = state.walls.filter((wall) => {
     if (wall.dmOnly && !canSeeHidden) return false;
     return wall.blockingVision;
@@ -54,13 +58,14 @@ function projectLive(
 
   const tokens: TokenRecord[] = [];
   for (const token of state.tokens) {
-    if (token.visibility === 'hidden' && !canSeeHidden && token.ownerUserId !== actor.userId) continue;
+    const ownsHidden =
+      Boolean(actor.userId) && token.ownerUserId === actor.userId;
+    if (token.visibility === 'hidden' && !canSeeHidden && !ownsHidden) continue;
     if (!canSeeHidden && observer && token.id !== observer.id && token.vision.enabled) {
       const origin = { x: observer.x, y: observer.y };
       const target = { x: token.x, y: token.y };
       if (!inVisionCone(origin, target, observer.vision.distance, observer.vision.angle, observer.rotation)) continue;
-      const walls = visionWalls.filter((wall) => !blockedWalls.has(wall.id) || state.doors.some((door) => door.wallId === wall.id && door.state !== 'open'));
-      if (!hasLineOfSight(origin, target, walls, blockedWalls)) continue;
+      if (!hasLineOfSight(origin, target, visionWalls, openDoorWalls)) continue;
     }
     if (!canSeeHidden) token.dmLabel = null;
     if (token.playerId) {
@@ -78,8 +83,10 @@ function projectLive(
   const annotations = state.annotations.filter((item) => canSeeHidden || !item.dmOnly);
 
   const initiative = extras.combat;
-  const active = extras.players.length
-    ? tokens.find((token) => token.initiativeId) ?? null
+  const order = extras.initiative ?? [];
+  const current = order[initiative.currentTurn];
+  const active = current
+    ? tokens.find((token) => token.playerId === current.participant_id || token.initiativeId === current.id) ?? null
     : null;
 
   return {
