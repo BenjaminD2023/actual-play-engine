@@ -6,6 +6,27 @@ function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 }
 
+function normalizeHost(host: string): string {
+  return host.replace(/^localhost\b/i, '127.0.0.1');
+}
+
+function assertSameOrigin(request: Request): void {
+  if (request.method === 'GET' || request.method === 'HEAD') return;
+  const origin = request.headers.get('origin');
+  const referer = request.headers.get('referer');
+  const host = request.headers.get('host') ?? new URL(request.url).host;
+  const expected = normalizeHost(host);
+  if (origin) {
+    if (normalizeHost(new URL(origin).host) !== expected) {
+      throw new ProtocolError('forbidden', 'Cross-origin request blocked.');
+    }
+    return;
+  }
+  if (referer && normalizeHost(new URL(referer).host) !== expected) {
+    throw new ProtocolError('forbidden', 'Cross-origin request blocked.');
+  }
+}
+
 function viewerFor(user: PublicUser | null, fallback: ViewerKind): ViewerKind {
   if (!user) return fallback;
   if (user.role === 'admin' || user.role === 'dm' || user.role === 'player' || user.role === 'audience') return user.role;
@@ -31,6 +52,7 @@ export async function handleVttRequest(
   });
 
   try {
+    assertSameOrigin(request);
     if (head === 'snapshot' && method === 'GET') {
       if (!user) return json({ error: 'unauthenticated', message: 'Authentication required' }, 401);
       const instanceId = new URL(request.url).searchParams.get('instanceId') ?? undefined;

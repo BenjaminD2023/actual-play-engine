@@ -17,9 +17,9 @@
     "lint": "node scripts/lint.mjs",
     "simulate-show": "npm run simulate-show -w @actualplay/engine",
     "simulate-vtt": "npm run test -w @actualplay/engine -- tests/vtt-simulate.test.ts",
-    "test:e2e": "npm run test -w @actualplay/vtt-reference --if-present",
+    "test:e2e": "npm run test:e2e -w @actualplay/vtt-reference",
     "dev:vtt": "npm run dev -w @actualplay/vtt-reference --if-present",
-    "verify": "npm run build && npm run lint && npm test && npm run simulate-show && npm run simulate-vtt"
+    "verify": "npm run build && npm run lint && npm test && npm run simulate-show && npm run simulate-vtt && npm run test:e2e"
   },
   "engines": {
     "node": ">=18.18.0"

@@ -2,6 +2,13 @@
 
 import { useState } from 'react';
 
+const HOME: Record<string, string> = {
+  admin: '/director',
+  dm: '/director',
+  player: '/player',
+  audience: '/audience',
+};
+
 export default function LoginPage() {
   const [error, setError] = useState('');
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -17,23 +24,24 @@ export default function LoginPage() {
       setError('Login failed');
       return;
     }
-    window.location.href = '/director';
+    const body = (await response.json()) as { user?: { role?: string } };
+    window.location.href = HOME[body.user?.role ?? 'admin'] ?? '/director';
   }
   return (
     <div className="login">
       <form className="card" onSubmit={onSubmit}>
         <h1>Login</h1>
-        <p>Reference console. Seed admin/admin (password hashed at boot).</p>
+        <p>Seeds: admin/admin, dm/dm, p1/p1, p2/p2, audience/audience</p>
         <p>
           <label>
             username
-            <input name="username" defaultValue="admin" />
+            <input name="username" defaultValue="admin" autoComplete="username" />
           </label>
         </p>
         <p>
           <label>
             password
-            <input name="password" type="password" defaultValue="admin" />
+            <input name="password" type="password" defaultValue="admin" autoComplete="current-password" />
           </label>
         </p>
         <button type="submit">enter</button>

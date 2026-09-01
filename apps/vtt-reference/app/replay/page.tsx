@@ -11,7 +11,7 @@ export default function ReplayPage() {
   }, []);
   return (
     <main className="side">
-      <h1>Replay (read-only)</h1>
+      <h1 data-testid="view-title">Replay</h1>
       <ol>
         {frames.map((frame) => (
           <li key={frame.sequence}>

@@ -77,24 +77,31 @@ export async function login(
   };
 }
 
-export async function bootstrapAdmin(
+export async function bootstrapUser(
   engine: ActualPlayEngine,
-  input: { username: string; password: string; email?: string | null }
+  input: { id?: string; username: string; password: string; role: UserRole; email?: string | null }
 ): Promise<void> {
   if (engine.store.getUserByUsername(input.username)) return;
   const password_hash = await bcrypt.hash(input.password, 12);
   const now = nowIso();
   engine.store.createUser({
-    id: createId(),
+    id: input.id ?? createId(),
     first_name: null,
     last_name: null,
     username: input.username,
     email: input.email ?? null,
-    role: 'admin',
+    role: input.role,
     password_hash,
     created_at: now,
     updated_at: now,
   });
+}
+
+export async function bootstrapAdmin(
+  engine: ActualPlayEngine,
+  input: { username: string; password: string; email?: string | null }
+): Promise<void> {
+  await bootstrapUser(engine, { ...input, role: 'admin' });
 }
 
 export function getRequestUser(engine: ActualPlayEngine, cookieHeader: string | null): PublicUser | null {

@@ -76,6 +76,38 @@ describe('Next adapter router', () => {
     expect(nowIso()).toContain('T');
   });
 
+  it('blocks a cross-origin VTT command', async () => {
+    const engine = createEngine({ qlab: { dryRun: true }, cues: { 'show.welcome': '1' }, vtt: { enabled: true } });
+    await engine.start();
+    await bootstrapAdmin(engine, { username: 'admin', password: 'secret' });
+    const login = await handleActualPlayRequest(
+      engine,
+      new Request('http://127.0.0.1/api/actualplay/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: 'admin', password: 'secret' }),
+      }),
+      ['auth', 'login']
+    );
+    const cookie = login.headers.get('set-cookie') ?? '';
+    const blocked = await handleActualPlayRequest(
+      engine,
+      new Request('http://127.0.0.1/api/actualplay/vtt/commands', {
+        method: 'POST',
+        headers: { cookie, origin: 'http://evil.example', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'cmd-x',
+          protocolVersion: 1,
+          type: 'ping.create',
+          sessionId: 's',
+          payload: { x: 1, y: 1 },
+        }),
+      }),
+      ['vtt', 'commands']
+    );
+    expect(blocked.status).toBe(403);
+    await engine.stop();
+  });
+
   it('rejects a forged JSON session cookie', async () => {
     const engine = createEngine({ qlab: { dryRun: true }, cues: { 'show.welcome': '1' } });
     await engine.start();

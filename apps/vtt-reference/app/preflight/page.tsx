@@ -11,7 +11,7 @@ export default function PreflightPage() {
   }, []);
   return (
     <main className="side">
-      <h1>Preflight</h1>
+      <h1 data-testid="view-title">Preflight</h1>
       <pre>{JSON.stringify(data, null, 2)}</pre>
     </main>
   );

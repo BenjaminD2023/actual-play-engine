@@ -1,15 +1,17 @@
 'use client';
 
-import { sendVttCommand } from '../../lib/client-api';
-import { PROTOCOL_VERSION } from '@actualplay/protocol';
+import { commandOnSnapshot, useVttSnapshot } from '../../lib/client-api';
 
 export default function OperatorPage() {
+  const { snapshot, error, refresh } = useVttSnapshot(2000);
   async function fire(type: string, payload: Record<string, unknown> = {}) {
-    await sendVttCommand({ id: crypto.randomUUID(), protocolVersion: PROTOCOL_VERSION, type, sessionId: 'active', payload });
+    await commandOnSnapshot(snapshot, type, payload);
+    await refresh();
   }
   return (
-    <main className="side" style={{ display: 'grid', gap: 12, padding: 16 }}>
-      <h1>Mobile operator</h1>
+    <main className="side operator" data-view="operator" style={{ display: 'grid', gap: 12, padding: 16 }}>
+      <h1 data-testid="view-title">Mobile operator</h1>
+      <p className="status">{error ?? snapshot?.live?.title ?? 'no live scene'}</p>
       <button onClick={() => void fire('combat.nextTurn')}>next turn</button>
       <button onClick={() => void fire('combat.previousTurn')}>previous turn</button>
       <button onClick={() => void fire('rundown.advance')}>advance rundown</button>

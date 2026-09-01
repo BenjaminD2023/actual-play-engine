@@ -1,5 +1,5 @@
 'use client';
 import { Console } from '../../components/Console';
 export default function Page() {
-  return <Console title="Transparent overlay" compact />;
+  return <Console title="Transparent overlay" mode="overlay" />;
 }

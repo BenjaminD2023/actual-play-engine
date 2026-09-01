@@ -132,6 +132,7 @@ export class VttRuntime {
       lastEventSequence: this.tables.lastSequence(sessionId),
       assets: this.tables.listAssets(),
     });
+    snap.sessionId = sessionId;
     return omitSecretsFromJson(snap, actor.viewer) as VttSnapshot;
   }
 

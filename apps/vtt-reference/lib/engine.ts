@@ -1,5 +1,5 @@
-import { createEngine, createId, nowIso, sqliteStore } from '@actualplay/engine';
-import { bootstrapAdmin } from '@actualplay/next';
+import { createEngine, nowIso, sqliteStore, type PlayerRecord } from '@actualplay/engine';
+import { bootstrapUser } from '@actualplay/next';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -17,21 +17,48 @@ export const engine = createEngine({
   vtt: { enabled: true, assetRoot: path.join(dataDir, 'assets') },
 });
 
-void engine.start().then(async () => {
-  await bootstrapAdmin(engine, { username: 'admin', password: 'admin' });
-  const admin = engine.store.getUserByUsername('admin');
-  if (admin && !engine.store.getUserByUsername('dm')) {
-    const now = nowIso();
-    engine.store.createUser({
-      id: createId(),
-      first_name: 'Dana',
-      last_name: null,
-      username: 'dm',
-      email: 'dm@local',
-      role: 'dm',
-      password_hash: admin.password_hash,
-      created_at: now,
-      updated_at: now,
-    });
-  }
-});
+export const engineReady = (async () => {
+  await engine.start();
+  await bootstrapUser(engine, { id: 'user-admin', username: 'admin', password: 'admin', role: 'admin' });
+  await bootstrapUser(engine, { id: 'user-dm', username: 'dm', password: 'dm', role: 'dm' });
+  await bootstrapUser(engine, { id: 'user-p1', username: 'p1', password: 'p1', role: 'player' });
+  await bootstrapUser(engine, { id: 'user-p2', username: 'p2', password: 'p2', role: 'player' });
+  await bootstrapUser(engine, { id: 'user-aud', username: 'audience', password: 'audience', role: 'audience' });
+  const session = engine.ensureSession('Reference session');
+  seedPlayer(session.id, 'player-1', 'user-p1', 'Ranger');
+  seedPlayer(session.id, 'player-2', 'user-p2', 'Cleric');
+})();
+
+function seedPlayer(sessionId: string, id: string, authUserId: string, name: string): void {
+  if (engine.store.getPlayer(id)) return;
+  const now = nowIso();
+  const player: PlayerRecord = {
+    id,
+    auth_user_id: authUserId,
+    session_id: sessionId,
+    character_name: name,
+    character_class: 'adventurer',
+    character_level: 3,
+    armor_class: 14,
+    current_hp: 22,
+    max_hp: 22,
+    temp_hp: 0,
+    version: 1,
+    spell_slots_level_1: 0,
+    spell_slots_level_2: 0,
+    spell_slots_level_3: 0,
+    spell_slots_level_4: 0,
+    spell_slots_level_5: 0,
+    spell_slots_level_6: 0,
+    spell_slots_level_7: 0,
+    spell_slots_level_8: 0,
+    spell_slots_level_9: 0,
+    inspiration_tokens: 0,
+    portrait_url: '',
+    audience_tags: '[]',
+    is_active: true,
+    created_at: now,
+    updated_at: now,
+  };
+  engine.store.createPlayer(player);
+}

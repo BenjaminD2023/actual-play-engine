@@ -41,11 +41,21 @@ Both runs exit 0.
 
 Included: protocol/engine/next/vtt TypeScript builds, Next.js production build of the reference app (16 static pages), lint, full vitest, `simulate-show`, `simulate-vtt`.
 
-Engine vitest: **49 passed**. Next: **4 passed** (including forged JSON cookie). Protocol, VTT client layers, reference public-API grep: passed.
+Engine vitest: **50 passed**. Next: **5 passed** (forged JSON cookie + cross-origin VTT POST). Protocol, VTT client layers, reference public-API grep: passed. Playwright e2e: **2 passed**.
 
 ## Playwright
 
-`npx playwright --version` → **1.62.1** (`{SCRATCH}/playwright-unavailable.log` actually records availability). Multi-client browser assertions are covered in vitest for ownership/hidden JSON; canvas layer order is unit-tested without WebGL.
+`npx playwright --version` → **1.62.1**.
+
+`npm run test:e2e` (Chrome, production `next start` on :38480) — **2 passed** (`apps/vtt-reference/tests/e2e/multiclient.spec.ts`):
+
+- Required views render titles and a canvas ≥200×200 (director, prepare, player, audience, broadcast, projector, overlay, rehearsal) plus operator/replay/preflight.
+- Separate contexts: admin/DM, p1, p2, audience, broadcast, projector, operator.
+- Player snapshot JSON **omits** `Lurker`; DM snapshot includes it.
+- p1 `token.move` on own token → 200; on p2's token → 403; audience move → 403.
+- Broadcast has no `prepare live show` control.
+
+Screenshots: `{SCRATCH}/views/*.png`. Player view shows two party tokens; director view also shows the hidden enemy (red).
 
 ## Production-style scenario
 

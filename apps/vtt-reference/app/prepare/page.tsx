@@ -1,5 +1,5 @@
 'use client';
 import { Console } from '../../components/Console';
 export default function Page() {
-  return <Console title="Preparation editor" />;
+  return <Console title="Preparation editor" mode="prepare" />;
 }

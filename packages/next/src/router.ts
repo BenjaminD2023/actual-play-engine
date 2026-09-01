@@ -185,6 +185,18 @@ export async function handleActualPlayRequest(
       return json({ players: session ? engine.store.listPlayers(session.id) : [] });
     }
 
+    if (head === 'polls' && method === 'GET') {
+      requireUser(user, ['admin', 'dm', 'player', 'audience']);
+      const session = engine.store.getActiveSession();
+      const polls = session ? engine.store.listPolls(session.id) : [];
+      return json({
+        polls: polls.map((poll) => ({
+          ...poll,
+          options: engine.store.listPollOptions(poll.id),
+        })),
+      });
+    }
+
     if (head === 'players' && rest[1] === 'hp' && method === 'POST') {
       const actor = requireUser(user, ['admin', 'dm', 'player']);
       const target = engine.store.getPlayer(rest[0]!);

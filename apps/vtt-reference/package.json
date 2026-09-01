@@ -6,7 +6,8 @@
     "dev": "next dev -p 38480",
     "build": "next build",
     "start": "next start -p 38480",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@actualplay/engine": "0.1.0",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@types/node": "^20.19.0",
     "@types/react": "^18.3.12",
+    "@playwright/test": "^1.62.1",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
   }

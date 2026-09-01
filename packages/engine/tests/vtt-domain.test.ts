@@ -3,6 +3,14 @@ import { ProtocolError } from '@actualplay/protocol';
 import { harness } from './vtt-helpers.js';
 
 describe('VTT domain', () => {
+  it('includes sessionId in snapshots before a live instance exists', async () => {
+    const h = await harness();
+    const snap = h.vtt.snapshot(h.session.id, h.dm);
+    expect(snap.sessionId).toBe(h.session.id);
+    expect(snap.live).toBeNull();
+    await h.engine.stop();
+  });
+
   it('rejects unknown command types', async () => {
     const h = await harness();
     await expect(
