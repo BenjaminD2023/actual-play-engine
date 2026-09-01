@@ -75,4 +75,21 @@ describe('Next adapter router', () => {
     expect(createId().length).toBeGreaterThan(0);
     expect(nowIso()).toContain('T');
   });
+
+  it('rejects a forged JSON session cookie', async () => {
+    const engine = createEngine({ qlab: { dryRun: true }, cues: { 'show.welcome': '1' } });
+    await engine.start();
+    await bootstrapAdmin(engine, { username: 'admin', password: 'secret' });
+    const forged = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/qlab/health', {
+        headers: {
+          cookie: `actualplay_session=${encodeURIComponent(JSON.stringify({ userId: 'nope', role: 'admin', expires: Date.now() + 99999 }))}`,
+        },
+      }),
+      ['qlab', 'health']
+    );
+    expect(forged.status).toBe(401);
+    await engine.stop();
+  });
 });

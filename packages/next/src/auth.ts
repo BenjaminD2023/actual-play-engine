@@ -30,16 +30,18 @@ export function parseSessionCookie(value: string | undefined | null): SessionPay
   if (!value) return null;
   try {
     const parsed = JSON.parse(value) as SessionPayload;
-    if (!parsed.userId || !parsed.role || !parsed.expires) return null;
-    if (Date.now() > parsed.expires) return null;
-    return parsed;
+    if (parsed && typeof parsed === 'object' && 'userId' in parsed) {
+      return null;
+    }
   } catch {
-    return null;
+    // Opaque server-side session ids are not JSON.
   }
+  if (!/^[A-Za-z0-9_-]{16,}$/.test(value)) return null;
+  return { userId: value, username: '', role: 'audience', expires: Date.now() + SESSION_MS };
 }
 
 export function serializeSessionCookie(session: SessionPayload): string {
-  return JSON.stringify(session);
+  return session.userId;
 }
 
 export async function login(
@@ -63,10 +65,11 @@ export async function login(
     last_name: user.last_name,
     email: user.email,
   };
+  const sessionId = engine.vtt.createSession(user.id, SESSION_MS);
   return {
     user: publicUser,
     session: {
-      userId: user.id,
+      userId: sessionId,
       username: user.username,
       role: user.role,
       expires: Date.now() + SESSION_MS,
@@ -96,9 +99,18 @@ export async function bootstrapAdmin(
 
 export function getRequestUser(engine: ActualPlayEngine, cookieHeader: string | null): PublicUser | null {
   const cookie = readCookie(cookieHeader, SESSION_COOKIE);
-  const session = parseSessionCookie(cookie);
-  if (!session) return null;
-  const user = engine.store.getUserById(session.userId);
+  if (!cookie) return null;
+  try {
+    const parsed = JSON.parse(cookie) as { userId?: string; role?: string };
+    if (parsed && typeof parsed === 'object' && parsed.userId && parsed.role) {
+      return null;
+    }
+  } catch {
+    // expected for opaque ids
+  }
+  const resolved = engine.vtt.resolveSession(cookie);
+  if (!resolved) return null;
+  const user = engine.store.getUserById(resolved.userId);
   if (!user) return null;
   return {
     id: user.id,
