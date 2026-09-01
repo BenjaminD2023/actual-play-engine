@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Actual Play Bridge</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Actual Play Bridge</h1>
+      <p>Sends MIDI from this Mac to the show engine.</p>
+      <label>Show server URL <input id="serverUrl" type="url" /></label>
+      <label>Bridge token <input id="bridgeToken" type="password" /></label>
+      <label class="row"><input id="enableDmInput" type="checkbox" /> Enable MIDI input</label>
+      <button id="save">Save</button>
+      <p id="status"></p>
+    </main>
+    <script src="renderer.js"></script>
+  </body>
+</html>

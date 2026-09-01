@@ -1,0 +1,37 @@
+{
+  "name": "@actualplay/next",
+  "version": "0.1.0",
+  "description": "Next.js App Router adapter for @actualplay/engine.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0"
+  },
+  "peerDependencies": {
+    "@actualplay/engine": "0.1.0",
+    "next": ">=14.2.0",
+    "react": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@actualplay/engine": "0.1.0",
+    "@types/bcrypt": "^6.0.0",
+    "@types/node": "^20.19.0",
+    "@types/react": "^18.3.12",
+    "next": "14.2.5",
+    "react": "^18.3.1",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

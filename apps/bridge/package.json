@@ -1,0 +1,15 @@
+{
+  "name": "@actualplay/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Companion MIDI host for @actualplay/engine.",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "npx electron .",
+    "test": "node --test midi-map.test.cjs"
+  },
+  "optionalDependencies": {
+    "@julusian/midi": "^3.6.1",
+    "electron": "^41.3.0"
+  }
+}
