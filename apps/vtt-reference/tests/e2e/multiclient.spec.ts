@@ -65,9 +65,16 @@ test('required views render a canvas or operator controls', async ({ page }) => 
   for (const [href, title] of routes) {
     await page.goto(href);
     await expect(page.getByTestId('view-title')).toHaveText(title);
+    if (href === '/preflight') {
+      await expect(page.getByTestId('preflight-status')).toBeVisible();
+    }
+    if (href === '/replay') {
+      await expect(page.getByTestId('replay-play')).toBeVisible();
+      await expect(page.getByTestId('replay-readonly')).toContainText(/not mutated/i);
+    }
     const shot = path.join(shotDir, `${href.slice(1) || 'home'}.png`);
     await page.screenshot({ path: shot, fullPage: false });
-    if (!['/operator', '/replay', '/preflight'].includes(href)) {
+    if (!['/operator', '/preflight'].includes(href)) {
       const canvas = page.locator('[data-testid="vtt-canvas"]');
       await expect(canvas).toBeVisible();
       const box = await canvas.boundingBox();

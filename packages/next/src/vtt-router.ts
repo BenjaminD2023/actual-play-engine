@@ -85,9 +85,28 @@ export async function handleVttRequest(
       return json(vtt.preflight(sessionId));
     }
 
+    if (head === 'replay' && tail[0] === 'export' && method === 'GET') {
+      if (!user) return json({ error: 'unauthenticated', message: 'Authentication required' }, 401);
+      const format = new URL(request.url).searchParams.get('format') ?? 'json';
+      if (format === 'csv') {
+        return new Response(vtt.exportReplayCsv(sessionId), {
+          headers: { 'content-type': 'text/csv; charset=utf-8' },
+        });
+      }
+      if (format === 'markers') {
+        return json({ markers: vtt.exportChapterMarkers(sessionId), liveMutated: false });
+      }
+      return json(vtt.exportReplayJson(sessionId));
+    }
+
     if (head === 'replay' && method === 'GET') {
       if (!user) return json({ error: 'unauthenticated', message: 'Authentication required' }, 401);
-      return json({ frames: vtt.replay(sessionId) });
+      const atRaw = new URL(request.url).searchParams.get('at');
+      if (atRaw === null || atRaw === '') {
+        return json({ frames: vtt.replay(sessionId), liveMutated: false });
+      }
+      const reconstructed = vtt.replayAt(sessionId, Number(atRaw), actor);
+      return json(reconstructed);
     }
 
     if (head === 'ephemeral' && method === 'POST') {

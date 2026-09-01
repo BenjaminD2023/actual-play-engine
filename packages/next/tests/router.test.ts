@@ -124,4 +124,46 @@ describe('Next adapter router', () => {
     expect(forged.status).toBe(401);
     await engine.stop();
   });
+
+  it('presses a virtual button through the VTT action catalog', async () => {
+    const engine = createEngine({
+      qlab: { dryRun: true },
+      cues: { 'show.welcome': '1' },
+      vtt: { enabled: true },
+    });
+    await engine.start();
+    await bootstrapAdmin(engine, { username: 'admin', password: 'secret' });
+    const login = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: 'admin', password: 'secret' }),
+      }),
+      ['auth', 'login']
+    );
+    const cookie = login.headers.get('set-cookie') ?? '';
+    const created = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/buttons', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'Mark', action_type: 'recording_marker', action_data: { label: 'http-btn' } }),
+      }),
+      ['buttons']
+    );
+    expect(created.status).toBe(200);
+    const { button } = (await created.json()) as { button: { id: string } };
+    const pressed = await handleActualPlayRequest(
+      engine,
+      new Request(`http://localhost/api/actualplay/buttons/${button.id}/press`, {
+        method: 'POST',
+        headers: { cookie },
+      }),
+      ['buttons', button.id, 'press']
+    );
+    expect(pressed.status).toBe(200);
+    const session = engine.store.getActiveSession()!;
+    expect(engine.vtt.tables.listMarkers(session.id).some((row) => row.label === 'http-btn')).toBe(true);
+    await engine.stop();
+  });
 });

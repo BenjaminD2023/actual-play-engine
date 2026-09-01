@@ -69,4 +69,5 @@ export { memoryStore, MemoryStore } from './store/memory.js';
 export { sqliteStore, SqliteStore } from './store/sqlite.js';
 export type { EngineStore, EngineConfig, PlayerRecord, SessionRecord, PollRecord } from './store/types.js';
 export { VttRuntime } from './vtt/runtime.js';
+export { ACTION_CATALOG, isRegisteredAction } from './vtt/actions.js';
 export { runMigrations, migrationStatus } from './store/migrations.js';

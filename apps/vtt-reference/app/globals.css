@@ -31,6 +31,19 @@ button.danger { background: var(--ap-danger); border-color: var(--ap-danger); co
 .login { display: grid; place-items: center; height: 100%; }
 .card { width: min(420px, 92vw); background: var(--ap-panel); padding: 24px; border: 1px solid #333; }
 .status { font-size: 12px; color: var(--ap-muted); }
+.preflight-badge { display: inline-block; padding: 6px 10px; font-weight: 700; border-radius: 4px; }
+.preflight-badge.ready { background: #16351f; color: var(--ap-ok); }
+.preflight-badge.ready_with_warnings { background: #3a2e10; color: var(--ap-accent); }
+.preflight-badge.not_ready { background: #3a1512; color: var(--ap-danger); }
+.preflight-list { list-style: none; padding: 0; margin: 12px 0; }
+.check { display: grid; grid-template-columns: 52px 1fr; gap: 6px 10px; padding: 8px 0; border-bottom: 1px solid #2a2e33; }
+.check.ok strong { color: var(--ap-ok); }
+.check.warn strong { color: var(--ap-accent); }
+.check.fail strong { color: var(--ap-danger); }
+.replay-banner { padding: 8px 12px; background: #16140c; }
+.timeline { list-style: none; padding: 0; max-height: 40vh; overflow: auto; }
+.timeline button { width: 100%; text-align: left; font-size: 12px; }
+.timeline button.active { border-color: var(--ap-accent); color: var(--ap-accent); }
 @media (max-width: 800px) {
   .board { grid-template-columns: 1fr; grid-template-rows: 1fr 40vh; }
   .top nav { width: 100%; }

@@ -18,7 +18,8 @@ export type CommandType =
   | 'combat.previous_turn'
   | 'combat.new_round'
   | 'combat.reset_counter'
-  | 'player.action';
+  | 'player.action'
+  | 'vtt.action';
 
 export interface CommandMeta {
   id?: string;

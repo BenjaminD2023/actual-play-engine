@@ -91,11 +91,20 @@ export class CommandBus {
           return this.wrap(command.type, command.id, await this.qlab.send(address, args));
         }
         default:
+          if (command.type.startsWith('combat.') || command.type === 'player.action') {
+            return {
+              commandId: command.id,
+              type: command.type,
+              ok: true,
+              status: 'ok',
+            };
+          }
           return {
             commandId: command.id,
             type: command.type,
-            ok: true,
-            status: 'ok',
+            ok: false,
+            status: 'error',
+            error: `Unknown command type: ${command.type}`,
           };
       }
     } catch (error) {

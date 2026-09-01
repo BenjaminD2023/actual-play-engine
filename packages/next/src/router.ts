@@ -239,6 +239,41 @@ export async function handleActualPlayRequest(
       return json({ poll });
     }
 
+    if (head === 'buttons' && method === 'GET' && rest.length === 0) {
+      requireUser(user, ['admin', 'dm']);
+      return json({ buttons: engine.store.listVirtualButtons() });
+    }
+
+    if (head === 'buttons' && method === 'POST' && rest.length === 0) {
+      requireUser(user, ['admin', 'dm']);
+      const body = (await request.json()) as {
+        id?: string;
+        label?: string;
+        action_type?: string;
+        action_data?: Record<string, unknown>;
+        color?: string;
+        key_bind?: string;
+        position?: number;
+      };
+      const button = engine.store.upsertVirtualButton({
+        id: body.id ?? crypto.randomUUID(),
+        position: Number(body.position ?? engine.store.listVirtualButtons().length),
+        label: String(body.label ?? 'Button'),
+        color: String(body.color ?? '#444'),
+        action_type: String(body.action_type ?? ''),
+        action_data: body.action_data ?? {},
+        key_bind: String(body.key_bind ?? ''),
+        is_active: true,
+      });
+      return json({ button });
+    }
+
+    if (head === 'buttons' && rest[1] === 'press' && method === 'POST') {
+      requireUser(user, ['admin', 'dm']);
+      const result = await engine.pressVirtualButton(rest[0]!, user!.role);
+      return json({ result }, result?.ok ? 200 : result?.status === 'unconfirmed' ? 202 : 400);
+    }
+
     if (head === 'actions' && rest[1] === 'trigger' && method === 'POST') {
       const actor = requireUser(user, ['admin', 'dm', 'player', 'audience']);
       const result = await engine.dispatch({

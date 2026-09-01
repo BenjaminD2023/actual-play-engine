@@ -19,6 +19,8 @@ import { AssetService } from './assets.js';
 import { assertCapability, capabilitiesFor, isReadOnlyViewer, viewerFromRole } from './capabilities.js';
 import { snapToGrid } from './geometry.js';
 import { emptyDocument, liveFromDocument, makeToken, stamp, type LiveState } from './model.js';
+import { applyReplayEvent, categorizeReplay } from './replay-apply.js';
+import { MIGRATIONS, migrationStatus } from '../store/migrations.js';
 import { exportScenePackage, extractZipEntries, importScenePackage } from './pack.js';
 import { omitSecretsFromJson, projectInstance } from './projection.js';
 import { RulesRegistry } from './rules.js';
@@ -141,6 +143,7 @@ export class VttRuntime {
   }
 
   async execute(raw: unknown, actor: ActorContext): Promise<CommandOutcome> {
+    if (!this.enabled) throw new ProtocolError('unavailable', 'VTT is disabled on this engine.');
     if (isReadOnlyViewer(actor.viewer) && typeof raw === 'object' && raw && 'type' in raw) {
       const type = String((raw as { type: string }).type);
       if (!type.startsWith('poll.') && type !== 'ping.create') {
@@ -483,6 +486,9 @@ export class VttRuntime {
     if (!scene) throw new ProtocolError('not_found', 'Scene not found.');
     const draft = { ...scene.draft, ...(envelope.payload.document as object ?? {}), title: String(envelope.payload.title ?? scene.draft.title) };
     if (envelope.payload.grid) draft.grid = { ...draft.grid, ...(envelope.payload.grid as object) };
+    if (typeof envelope.payload.mapAssetId === 'string') draft.mapAssetId = envelope.payload.mapAssetId;
+    if (typeof envelope.payload.animated === 'boolean') draft.animated = envelope.payload.animated;
+    if (typeof envelope.payload.notes === 'string') draft.notes = envelope.payload.notes;
     const updated = this.tables.putScene({ ...scene, draft, title: draft.title, updated_at: stamp(), version: scene.version + 1 });
     this.append(envelope, actor, scene.id, updated.version, 'vtt.scene.updated', { sceneId: scene.id });
     return { ok: true, version: updated.version, result: { scene: updated } };
@@ -796,7 +802,11 @@ export class VttRuntime {
       version: instance.version + 1,
       updated_at: stamp(),
     });
-    this.append(envelope, actor, instance.id, updated.version, 'vtt.checkpoint.restored', { checkpointId: row.id, audit: true });
+    this.append(envelope, actor, instance.id, updated.version, 'vtt.checkpoint.restored', {
+      checkpointId: row.id,
+      audit: true,
+      state: structuredClone(row.state),
+    });
     return { ok: true, version: updated.version, result: { instance: updated, restored: row.id } };
   }
 
@@ -812,6 +822,7 @@ export class VttRuntime {
   }
 
   async handleRegisteredAction(action: string, payload: Record<string, unknown>, actor: ActorContext, sessionId: string): Promise<CommandOutcome> {
+    if (!this.enabled) throw new ProtocolError('unavailable', 'VTT is disabled on this engine.');
     if (!isRegisteredAction(action)) throw new ProtocolError('invalid_request', `Unknown registered action: ${action}`);
     const map: Record<string, CommandEnvelope['type']> = {
       show_preset: 'showPreset.run',
@@ -934,28 +945,212 @@ export class VttRuntime {
   }
 
   preflight(sessionId: string) {
-    const warnings: Array<{ code: string; message: string; action: string }> = [];
+    const checks: Array<{ code: string; level: 'ok' | 'warn' | 'fail'; message: string; action: string }> = [];
+    const push = (code: string, level: 'ok' | 'warn' | 'fail', message: string, action: string) => {
+      checks.push({ code, level, message, action });
+    };
+
+    let dbAvailable = true;
+    let dbWritable = true;
+    try {
+      if (this.engine.store instanceof SqliteStore) {
+        this.engine.store.database.prepare('SELECT 1').get();
+        this.engine.store.database.prepare(`SELECT count(*) as c FROM schema_migrations`).get();
+      }
+      this.engine.store.getActiveSession();
+    } catch (error) {
+      dbAvailable = false;
+      dbWritable = false;
+      push('database', 'fail', 'Database is not available.', error instanceof Error ? error.message : 'Repair the SQLite file.');
+    }
+    if (dbAvailable) push('database', 'ok', 'Database is reachable and readable.', 'None.');
+
+    let migrationsOk = true;
+    let applied: string[] = [];
+    if (this.engine.store instanceof SqliteStore) {
+      applied = migrationStatus(this.engine.store.database).map((row) => row.id);
+      const missing = MIGRATIONS.filter((migration) => !applied.includes(migration.id)).map((migration) => migration.id);
+      if (missing.length) {
+        migrationsOk = false;
+        push('migrations', 'fail', `Missing migrations: ${missing.join(', ')}.`, 'Restart the engine so pending migrations apply.');
+      } else {
+        push('migrations', 'ok', `All ${applied.length} migrations applied.`, 'None.');
+      }
+    } else {
+      push('migrations', 'ok', 'Memory store does not require SQL migrations.', 'None.');
+    }
+
     const status = this.engine.health();
-    if (!status.qlab.connected && this.engine.qlab.kind !== 'dry-run') {
-      warnings.push({ code: 'qlab', message: 'QLab is not connected.', action: 'Open QLab or enable dry-run.' });
+    if (this.engine.qlab.kind === 'dry-run') {
+      push('qlab', 'ok', 'QLab dry-run is active (acknowledgements are simulated).', 'Connect a live workspace for dress rehearsal.');
+    } else if (!status.qlab.connected) {
+      push('qlab', 'warn', `QLab is disconnected (${status.qlab.lastError ?? 'no error'}).`, 'Open QLab, enable OSC, or switch to dry-run.');
+    } else if (!status.qlab.authenticated && status.qlab.lastError) {
+      push('qlab-auth', 'warn', 'QLab is reachable but not authenticated.', 'Set the workspace passcode on the engine config.');
+    } else {
+      push('qlab', 'ok', `QLab linked ${status.qlab.host}:${status.qlab.port}.`, 'None.');
     }
-    const instance = this.tables.liveInstance(sessionId);
-    if (instance?.state.mapAssetId) {
-      const asset = this.tables.getAsset(instance.state.mapAssetId);
-      if (!asset) warnings.push({ code: 'asset', message: 'Live map asset is missing.', action: 'Re-upload the map.' });
+
+    const cueList = this.engine.cues.list();
+    const cueCount = Object.keys(cueList).length;
+    if (cueCount === 0) push('cues', 'warn', 'Show cue map is empty.', 'Load numbered cues on the show map.');
+    else push('cues', 'ok', `${cueCount} show cues mapped.`, 'None.');
+
+    const midi = this.engine.store.getConfig();
+    if (!midi.bridgeTokenHash) {
+      push('midi', 'warn', 'MIDI bridge token is not configured.', 'Rotate a bridge token for the MIDI host.');
+    } else {
+      push('midi', 'ok', 'MIDI bridge token is present.', 'None.');
     }
-    const ready = warnings.length === 0 ? 'ready' : 'ready_with_warnings';
-    return { ready, warnings, qlab: status.qlab, migrations: true };
+
+    const live = this.tables.liveInstance(sessionId);
+    const staged = this.tables.listInstances(sessionId).find((row) => row.status === 'staged');
+    for (const [label, instance] of [
+      ['live', live],
+      ['staged', staged],
+    ] as const) {
+      if (!instance) {
+        if (label === 'live') push('live-scene', 'warn', 'No live scene is active.', 'Stage and activate a published scene.');
+        continue;
+      }
+      if (instance.state.mapAssetId) {
+        const asset = this.tables.getAsset(instance.state.mapAssetId);
+        if (!asset) push(`${label}-asset`, 'fail', `${label} map asset is missing.`, 'Re-upload the map and update the scene draft.');
+        else if (asset.variants.length < 3) push(`${label}-variants`, 'warn', `${label} map is missing display/thumb variants.`, 'Re-upload the map so variants are generated.');
+        else push(`${label}-asset`, 'ok', `${label} map asset ${asset.hash.slice(0, 8)} is present.`, 'None.');
+      } else {
+        push(`${label}-asset`, 'warn', `${label} scene has no map asset.`, 'Attach a PNG/WebP/WebM map in preparation.');
+      }
+      const missingArt = instance.state.tokens.filter((token) => token.assetId && !this.tables.getAsset(token.assetId));
+      if (missingArt.length) {
+        push(`${label}-token-art`, 'warn', `${missingArt.length} tokens on the ${label} scene are missing art.`, 'Re-assign token artwork.');
+      }
+    }
+
+    const drafts = this.tables.listScenes('default').filter((scene) => scene.status === 'draft');
+    if (drafts.length) push('drafts', 'warn', `${drafts.length} unpublished draft(s).`, 'Publish or archive leftover drafts.');
+    else push('drafts', 'ok', 'No unsaved published-scene drafts.', 'None.');
+
+    const expired = this.tables.listClients(sessionId).length;
+    push('clients', 'ok', `${expired} remembered client(s); ${this.engine.store.listPlayers(sessionId).length} players in session.`, 'None.');
+
+    const failedHooks = this.tables.listDeliveries().filter((row) => row.status === 'failed');
+    if (failedHooks.length) push('webhooks', 'warn', `${failedHooks.length} webhook delivery failure(s).`, 'Inspect webhook secrets and retry.');
+    else push('webhooks', 'ok', 'No failed webhook deliveries.', 'None.');
+
+    const unconfirmed = this.engine.store.listFireLog(50).filter((entry) => entry.status === 'unconfirmed' || !entry.confirmed);
+    if (unconfirmed.length) {
+      push('unconfirmed', 'warn', `${unconfirmed.length} recent unconfirmed QLab/fire actions.`, 'Re-fire or confirm the QLab workspace is accepting OSC.');
+    } else {
+      push('unconfirmed', 'ok', 'No recent unconfirmed fire-log entries.', 'None.');
+    }
+
+    push(
+      'protocol',
+      'ok',
+      `Protocol version ${PROTOCOL_VERSION}.`,
+      'Keep clients on the same protocol version.'
+    );
+    push(
+      'rehearsal',
+      this.engine.qlab.kind === 'dry-run' ? 'ok' : 'ok',
+      this.engine.qlab.kind === 'dry-run' ? 'Rehearsal/dry-run mode is on.' : 'Live QLab driver is selected.',
+      this.engine.qlab.kind === 'dry-run' ? 'Switch to TCP QLab for the house.' : 'None.'
+    );
+
+    const hasFail = checks.some((check) => check.level === 'fail');
+    const hasWarn = checks.some((check) => check.level === 'warn');
+    const ready = !dbAvailable || !dbWritable || !migrationsOk || hasFail ? 'not_ready' : hasWarn ? 'ready_with_warnings' : 'ready';
+    return {
+      ready,
+      checks,
+      warnings: checks.filter((check) => check.level !== 'ok').map((check) => ({
+        code: check.code,
+        message: check.message,
+        action: check.action,
+      })),
+      qlab: status.qlab,
+      migrations: applied,
+      rehearsal: this.engine.qlab.kind === 'dry-run',
+      protocolVersion: PROTOCOL_VERSION,
+    };
   }
 
-  replay(sessionId: string) {
+  replayFrames(sessionId: string) {
     return this.tables.listEvents(sessionId, 0).map((event) => ({
       sequence: event.sequence,
       at: event.timestamp,
       type: event.type,
       summary: event.type,
+      category: categorizeReplay(event.type),
       commandId: event.commandId,
+      unconfirmed: event.type === 'vtt.qlab.result' && event.payload.status === 'unconfirmed',
+      error: typeof event.payload.error === 'string' ? event.payload.error : null,
     }));
+  }
+
+  replay(sessionId: string) {
+    return this.replayFrames(sessionId);
+  }
+
+  replayAt(sessionId: string, at: number, actor: ActorContext) {
+    const instance = this.tables.liveInstance(sessionId) ?? this.tables.listInstances(sessionId)[0] ?? null;
+    const liveVersion = instance?.version ?? 0;
+    const frames = this.replayFrames(sessionId);
+    if (!instance) {
+      return { frames, live: null, at, liveMutated: false, liveVersion };
+    }
+    const revision = this.tables.getRevision(instance.revision_id);
+    let state = revision ? liveFromDocument(revision.document) : structuredClone(instance.state);
+    for (const event of this.tables.listEvents(sessionId, 0)) {
+      if (event.sequence > at) break;
+      state = applyReplayEvent(state, event);
+    }
+    const game = this.engine.store.getGameState(sessionId);
+    const projected = projectInstance(
+      { ...instance, state, last_event_sequence: at },
+      actor,
+      {
+        players: this.engine.store.listPlayers(sessionId),
+        combat: { mode: game.combat_mode, round: game.round_number, currentTurn: game.current_turn },
+        lastEventSequence: at,
+        assets: this.tables.listAssets(),
+      }
+    );
+    projected.sessionId = sessionId;
+    const after = this.tables.getInstance(instance.id);
+    if (after && after.version !== liveVersion) {
+      throw new ProtocolError('invalid_request', 'Replay reconstruction mutated live state.');
+    }
+    return {
+      frames,
+      live: projected.live,
+      at,
+      liveMutated: false,
+      liveVersion: after?.version ?? liveVersion,
+    };
+  }
+
+  exportReplayJson(sessionId: string) {
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId,
+      liveMutated: false,
+      frames: this.replayFrames(sessionId),
+      markers: this.tables.listMarkers(sessionId),
+    };
+  }
+
+  exportReplayCsv(sessionId: string): string {
+    const header = 'sequence,at,category,type,commandId,unconfirmed,error';
+    const rows = this.replayFrames(sessionId).map((frame) =>
+      [frame.sequence, frame.at, frame.category, frame.type, frame.commandId, frame.unconfirmed ? '1' : '0', frame.error ?? ''].join(',')
+    );
+    return [header, ...rows].join('\n');
+  }
+
+  exportChapterMarkers(sessionId: string) {
+    return this.tables.listMarkers(sessionId);
   }
 
   pushEphemeral(event: Record<string, unknown>): void {
