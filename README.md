@@ -111,6 +111,17 @@ The Bridge never talks to QLab directly. It posts MIDI to the engine; the engine
 
 This does not certify QLab, the LAN, or macOS. It does refuse to pretend a cue fired.
 
+## Production Maker (separate project)
+
+Preproduction authoring is **not** in this repo. It lives in the sibling `actual-play-production-maker` project (`npm run dev:maker` → http://127.0.0.1:38490). Export a `.actualplay-pack`, then import with:
+
+```ts
+createEngine({ production: { enabled: true }, vtt: { enabled: true }, qlab: { dryRun: true } })
+engine.production.importPack(zip, adminActor)
+```
+
+On this branch (`feat/production-vtt-maker`): `npm run verify:production-maker`.
+
 ## Develop
 
 ```bash
