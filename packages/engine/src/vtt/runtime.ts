@@ -828,6 +828,18 @@ export class VttRuntime {
   }
 
   async handleRegisteredAction(action: string, payload: Record<string, unknown>, actor: ActorContext, sessionId: string): Promise<CommandOutcome> {
+    if (action === 'production_action') {
+      if (!this.engine.production.enabled) throw new ProtocolError('unavailable', 'Production is disabled on this engine.');
+      const run = await this.engine.production.executeAction(
+        String(payload.deploymentId ?? ''),
+        String(payload.actionId ?? ''),
+        actor
+      );
+      const qlab = run.steps.find((step) => step.qlab)?.qlab;
+      const failed = run.steps.some((step) => step.status === 'failed');
+      const unconfirmed = run.steps.some((step) => step.status === 'unconfirmed');
+      return { ok: !failed && !unconfirmed, result: { run, qlab } };
+    }
     if (!this.enabled) throw new ProtocolError('unavailable', 'VTT is disabled on this engine.');
     if (!isRegisteredAction(action)) throw new ProtocolError('invalid_request', `Unknown registered action: ${action}`);
     const map: Record<string, CommandEnvelope['type']> = {
@@ -858,6 +870,20 @@ export class VttRuntime {
     if (action === 'panic') {
       const result = await this.engine.panic({ source: showSource, actorId: actor.userId });
       return { ok: result.ok, result: { qlab: result } };
+    }
+    if (action === 'production_action') {
+      if (!this.engine.production) throw new ProtocolError('unavailable', 'Production runtime is not attached.');
+      const run = await this.engine.production.executeAction(
+        String(payload.deploymentId ?? ''),
+        String(payload.actionId ?? ''),
+        actor
+      );
+      const steps = Array.isArray((run as { steps?: Array<{ status: string }> })?.steps)
+        ? (run as { steps: Array<{ status: string }> }).steps
+        : [];
+      const unconfirmed = steps.some((step) => step.status === 'unconfirmed');
+      const failed = steps.some((step) => step.status === 'failed' || step.status === 'blocked');
+      return { ok: !unconfirmed && !failed, result: { run } };
     }
     const type = map[action];
     return this.execute(

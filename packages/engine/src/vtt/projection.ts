@@ -124,7 +124,17 @@ function projectLive(
 export function omitSecretsFromJson(value: unknown, viewer: ViewerKind): unknown {
   if (viewer === 'admin' || viewer === 'dm') return value;
   return JSON.parse(JSON.stringify(value, (key, inner: unknown) => {
-    if (key === 'dmLabel' || key === 'secret' || key === 'dmOnly') return undefined;
+    if (
+      key === 'dmLabel' ||
+      key === 'secret' ||
+      key === 'dmOnly' ||
+      key === 'cueBindings' ||
+      key === 'qlabPasscode' ||
+      key === 'passcode' ||
+      key === 'bridgeToken'
+    ) {
+      return undefined;
+    }
     return inner;
   })) as unknown;
 }

@@ -17,4 +17,5 @@ export {
   panic,
 } from './hooks.js';
 export { handleVttRequest } from './vtt-router.js';
+export { handleProductionRequest } from './production-router.js';
 export { useVttSnapshot, sendVttCommand } from './vtt-hooks.js';

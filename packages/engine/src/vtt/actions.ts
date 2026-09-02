@@ -16,6 +16,7 @@ export const ACTION_CATALOG = [
   'hide_handout',
   'recording_marker',
   'panic',
+  'production_action',
 ] as const;
 
 export type RegisteredAction = (typeof ACTION_CATALOG)[number];

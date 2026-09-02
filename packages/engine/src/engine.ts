@@ -32,6 +32,7 @@ import { memoryStore } from './store/memory.js';
 import type { EngineStore, PlayerRecord, PollOptionRecord, PollRecord } from './store/types.js';
 import { VttRuntime, type VttRuntimeOptions } from './vtt/runtime.js';
 import { isRegisteredAction } from './vtt/actions.js';
+import { ProductionRuntime, type ProductionRuntimeOptions } from './production/runtime.js';
 
 export interface EngineOptions {
   store?: EngineStore;
@@ -39,6 +40,7 @@ export interface EngineOptions {
   cues?: ShowCueMap;
   midiDedupeMs?: number;
   vtt?: VttRuntimeOptions;
+  production?: ProductionRuntimeOptions;
 }
 
 export class ActualPlayEngine {
@@ -48,6 +50,7 @@ export class ActualPlayEngine {
   readonly cues: ShowCues;
   readonly commands: CommandBus;
   readonly vtt: VttRuntime;
+  readonly production: ProductionRuntime;
   private readonly midiDedupe: MidiDedupe;
 
   constructor(options: EngineOptions = {}) {
@@ -66,7 +69,11 @@ export class ActualPlayEngine {
       : new QLabSession(options.qlab ?? stored.qlab);
     this.commands = new CommandBus(this.qlab, this.cues, this.store, this.events);
     this.midiDedupe = new MidiDedupe(options.midiDedupeMs);
-    this.vtt = new VttRuntime(this, options.vtt ?? { enabled: false });
+    this.vtt = new VttRuntime(this, options.vtt ?? { enabled: options.production?.enabled === true });
+    this.production = new ProductionRuntime(
+      this,
+      options.production ?? { enabled: options.vtt?.enabled === true }
+    );
   }
 
   async start(): Promise<void> {
@@ -146,7 +153,7 @@ export class ActualPlayEngine {
       return null;
     }
 
-    if (this.vtt.enabled && isRegisteredAction(actionType)) {
+    if ((this.vtt.enabled || this.production.enabled) && isRegisteredAction(actionType)) {
       return this.dispatchRegisteredAction(actionType, actionData, source);
     }
 
@@ -179,7 +186,7 @@ export class ActualPlayEngine {
     if (!button || !button.is_active) {
       throw new LivePlayError('not_found', `Virtual button ${id} is missing or inactive.`);
     }
-    if (this.vtt.enabled && isRegisteredAction(button.action_type)) {
+    if ((this.vtt.enabled || this.production.enabled) && isRegisteredAction(button.action_type)) {
       return this.dispatchRegisteredAction(button.action_type, button.action_data, source);
     }
     return this.ingestMidi({ actionType: button.action_type, actionData: button.action_data }, source);

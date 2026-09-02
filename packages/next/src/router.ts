@@ -1,6 +1,7 @@
 import {
   AuthPolicyError,
   LivePlayError,
+  ProductionError,
   ShowCueError,
   type ActualPlayEngine,
   type CommandSource,
@@ -9,6 +10,7 @@ import {
 } from '@actualplay/engine';
 import { getRequestUser, login, requireUser, serializeSessionCookie, SESSION_COOKIE, type PublicUser } from './auth.js';
 import { handleVttRequest } from './vtt-router.js';
+import { handleProductionRequest } from './production-router.js';
 import { ProtocolError } from '@actualplay/protocol';
 
 function json(data: unknown, status = 200, headers?: HeadersInit): Response {
@@ -26,7 +28,12 @@ function errorResponse(error: unknown): Response {
     return json({ error: 'Forbidden' }, 403);
   }
   if (error instanceof ProtocolError) return json(error.toJSON(), error.httpStatus);
+  if (error instanceof ProductionError) return json(error.toJSON(), error.httpStatus);
   if (error instanceof AuthPolicyError) return json({ error: error.message, code: 'forbidden' }, 403);
+  if (error && typeof error === 'object' && 'httpStatus' in error && typeof (error as { httpStatus: unknown }).httpStatus === 'number') {
+    const packed = error as { httpStatus: number; toJSON?: () => unknown; message: string; code?: string };
+    return json(typeof packed.toJSON === 'function' ? packed.toJSON() : { error: packed.code ?? packed.message, message: packed.message }, packed.httpStatus);
+  }
   if (error instanceof ShowCueError || error instanceof LivePlayError) {
     return json({ error: error.message }, 400);
   }
@@ -289,6 +296,10 @@ export async function handleActualPlayRequest(
     if (head === 'vtt') {
       const handled = await handleVttRequest(engine, request, rest, user);
       if (handled) return handled;
+    }
+
+    if (head === 'production') {
+      return handleProductionRequest(engine, request, rest, user);
     }
 
     if (head === 'events' && method === 'GET') {

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createEngine, createId, nowIso } from '@actualplay/engine';
-import { bootstrapAdmin } from '../src/auth.js';
+import { bootstrapAdmin, bootstrapUser } from '../src/auth.js';
 import { handleActualPlayRequest } from '../src/router.js';
 
 const dirs: string[] = [];
@@ -225,6 +225,38 @@ describe('Next adapter router', () => {
     const body = Buffer.from(await got.arrayBuffer());
     expect(body.byteLength).toBe(png.byteLength);
     expect(body.equals(png)).toBe(true);
+    await engine.stop();
+  });
+
+  it('returns 403 when a player tries to execute a production action', async () => {
+    const engine = createEngine({
+      qlab: { dryRun: true },
+      cues: { 'crypt-door': '1' },
+      vtt: { enabled: true },
+      production: { enabled: true },
+    });
+    await engine.start();
+    await bootstrapAdmin(engine, { username: 'admin', password: 'secret' });
+    await bootstrapUser(engine, { username: 'pat', password: 'secret', role: 'player' });
+    const login = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: 'pat', password: 'secret' }),
+      }),
+      ['auth', 'login']
+    );
+    const cookie = login.headers.get('set-cookie') ?? '';
+    const denied = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/production/executeAction', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ deploymentId: 'dep', actionId: 'act_open_west' }),
+      }),
+      ['production', 'executeAction']
+    );
+    expect(denied.status).toBe(403);
     await engine.stop();
   });
 });

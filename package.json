@@ -19,7 +19,11 @@
     "simulate-vtt": "npm run test -w @actualplay/engine -- tests/vtt-simulate.test.ts",
     "test:e2e": "npm run test:e2e -w @actualplay/vtt-reference",
     "dev:vtt": "npm run dev -w @actualplay/vtt-reference --if-present",
-    "verify": "npm run build && npm run lint && npm test && npm run simulate-show && npm run simulate-vtt && npm run test:e2e"
+    "dev:maker": "npm run dev --prefix ../actual-play-production-maker -w @actualplay/production-maker",
+    "dev:production-runtime": "npm run dev --prefix ../actual-play-production-maker -w @actualplay/production-runtime-reference",
+    "simulate-production-pack": "npm run test -w @actualplay/engine -- tests/production-action.test.ts",
+    "verify:production-maker": "npm run test -w @actualplay/engine -- tests/production-import.test.ts tests/production-action.test.ts tests/production-qlab-unconfirmed.test.ts",
+    "verify": "npm run build && npm run lint && npm test && npm run simulate-show && npm run simulate-vtt && npm run test:e2e && npm run verify:production-maker"
   },
   "engines": {
     "node": ">=18.18.0"

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { ENGINE_SCHEMA } from './schema.js';
 import { VTT_SCHEMA } from '../vtt/schema.js';
+import { PRODUCTION_SCHEMA } from '../production/schema.js';
 
 export interface Migration {
   id: string;
@@ -82,6 +83,7 @@ export const MIGRATIONS: Migration[] = [
   { id: '001_baseline', sql: ENGINE_SCHEMA },
   { id: '002_foundation', sql: FOUNDATION_SCHEMA },
   { id: '003_vtt', sql: VTT_SCHEMA },
+  { id: '004_production', sql: PRODUCTION_SCHEMA },
 ];
 
 export function checksumSql(sql: string): string {
