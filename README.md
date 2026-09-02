@@ -1,25 +1,69 @@
 # Actual Play Engine
 
-Importable show-control engine for D&D actual plays. Theme and page chrome stay in each show app. This repo is the theatre computer: QLab, MIDI, combat, audience votes, HP, a fire log, and a first-class 2D VTT.
+Actual Play Engine is a TypeScript show-control runtime for tabletop actual plays. It coordinates QLab, MIDI controls, combat state, audience voting, HP tracking, an append-only fire log, and a reusable 2D VTT.
 
-It is extracted from the Jun 2026 black-box show (`Actual_Play_Jun26`) and rewritten so a web click cannot report success unless QLab acked — or the operator sees `unconfirmed`.
+Show apps keep their own theme and page chrome. This workspace owns the live-show state and the rule that matters most: a QLab command cannot report success unless QLab acknowledges it. Missing acknowledgements are recorded as `unconfirmed`.
 
-## Packages
+## Workspace
 
-| Package | Import | Role |
+| Package | Import | Purpose |
 |---|---|---|
-| `@actualplay/protocol` | command/event schemas | Browser-safe runtime validation |
-| `@actualplay/engine` | `createEngine` | Framework-agnostic core + VTT runtime |
-| `@actualplay/next` | `createActualPlayHandlers` | Next.js App Router routes, middleware, hooks |
-| `@actualplay/vtt` | `VttCanvas` | PixiJS canvas + snapshot client |
-| `@actualplay/bridge` | companion `.app` | MIDI host on the QLab Mac |
-| `@actualplay/vtt-reference` | `npm run dev:vtt` | Full director/player/broadcast console |
+| `packages/protocol` | `@actualplay/protocol` | Browser-safe command and event schemas |
+| `packages/engine` | `@actualplay/engine` | Framework-agnostic show-control core and VTT runtime |
+| `packages/next` | `@actualplay/next` | Next.js App Router handlers, middleware, and client hooks |
+| `packages/vtt` | `@actualplay/vtt` | React and PixiJS VTT canvas |
+| `apps/bridge` | private app | MIDI host for the Mac connected to the control surface |
+| `apps/vtt-reference` | private app | Director, player, audience, broadcast, projector, and operator reference UI |
 
-## Import into the next show
+## Requirements
+
+- Node.js 18.18 or newer
+- npm
+- QLab with OSC enabled for live cue control; development can use dry-run mode
+
+## Get started
+
+```bash
+npm install
+npm run build
+npm test
+npm run dev:vtt
+```
+
+Open <http://127.0.0.1:38480/login>. The reference app uses QLab dry-run mode by default.
+
+For the complete build, lint, unit, simulation, and browser test suite:
+
+```bash
+npx playwright install
+npm run verify
+```
+
+## Use the engine in a show app
+
+The packages are not published yet. Reference the local workspace from the show app:
+
+```json
+{
+  "dependencies": {
+    "@actualplay/protocol": "file:../actual-play-engine/packages/protocol",
+    "@actualplay/engine": "file:../actual-play-engine/packages/engine",
+    "@actualplay/next": "file:../actual-play-engine/packages/next"
+  }
+}
+```
+
+Build this workspace before installing or running the show app:
+
+```bash
+npm run build
+```
+
+Create and start one engine instance:
 
 ```ts
+// lib/engine.ts
 import { createEngine, sqliteStore } from '@actualplay/engine';
-import { createActualPlayHandlers, actualPlayMiddleware } from '@actualplay/next';
 
 export const engine = createEngine({
   store: sqliteStore('./data/show.db'),
@@ -36,6 +80,8 @@ export const engine = createEngine({
 await engine.start();
 ```
 
+Expose the engine through a Next.js catch-all route:
+
 ```ts
 // app/api/actualplay/[...path]/route.ts
 import { createActualPlayHandlers } from '@actualplay/next';
@@ -44,113 +90,108 @@ import { engine } from '@/lib/engine';
 export const { GET, POST, PUT, PATCH, DELETE } = createActualPlayHandlers(engine);
 ```
 
+Add the supplied authentication middleware:
+
 ```ts
 // middleware.ts
 export { actualPlayMiddleware as middleware } from '@actualplay/next';
 ```
 
-A sibling reference show lives at `/Users/benjamin/actual-play-sample` (not in this repo).
+A sibling reference show lives in `../actual-play-sample`.
 
-Until you publish, depend on the local packages:
+## QLab and cue names
 
-```json
-{
-  "dependencies": {
-    "@actualplay/engine": "file:../actual-play-engine/packages/engine",
-    "@actualplay/next": "file:../actual-play-engine/packages/next"
-  }
-}
+Enable **Workspace Settings → Network → Accept OSC commands** in QLab. The default OSC port is `53000`; passcodes and workspace IDs are optional.
+
+Numbered cues use `/cue/{n}/start`. The legacy `/go` address for a cue remains aliased. Workspace panic uses `/panic` and jumps the command queue.
+
+Use stable, show-neutral cue keys:
+
+```text
+show.welcome
+show.end
+combat.battle-1
+combat.battle-2
+pc.wizard.fireball
 ```
 
-Build the engine first: `npm run build -w @actualplay/engine`.
+Legacy names (`welcome`, `battle1`, `battle2`, and `end`) still resolve when their replacements are mapped. Missing mappings are errors and are never silently skipped.
 
-## QLab
-
-Enable **Workspace Settings → Network → Accept OSC commands**. Default port is `53000`. Optional passcode and workspace id are supported.
-
-Numbered cues are fired with the official address `/cue/{n}/start` (legacy `/go` on a cue is aliased). Workspace panic is `/panic` and **jumps the command queue**.
-
-A GO never returns `ok` unless QLab replied. A dropped reply is `unconfirmed`, logged, and the session reconnects.
-
-Dry-run (no QLab process):
+Use dry-run mode when QLab is unavailable:
 
 ```ts
-createEngine({ qlab: { dryRun: true }, cues: { 'show.welcome': '1' } })
+createEngine({
+  qlab: { dryRun: true },
+  cues: { 'show.welcome': '1' },
+});
 ```
 
-## Show cue names
+## MIDI bridge
 
-Use generic keys, not hardcoded Strixhaven labels:
+On the Mac connected to the MIDI surface:
 
-- `show.welcome`, `show.end`
-- `combat.battle-1`, `combat.battle-2`
-- `pc.wizard.fireball`
+1. Generate a token with `POST /api/actualplay/midi/bridge-token`. The raw token is shown once; only its hash is stored.
+2. In `apps/bridge`, run `npm install`, then `npm start`.
+3. Enter the show URL and token.
 
-Legacy names `welcome`, `battle1`, `battle2`, `end` still resolve if the new keys are mapped.
-
-Missing map entries are errors. They are never silently skipped.
-
-## Bridge
-
-On the Mac that sees the MIDI surface:
-
-1. Admin generates a token: `POST /api/actualplay/midi/bridge-token` (raw token is shown once; only a hash is stored).
-2. In `apps/bridge`, install optional Electron/MIDI natives (`npm install`) and run `npm start`.
-3. Paste the show URL and token.
-
-The Bridge never talks to QLab directly. It posts MIDI to the engine; the engine is the only process allowed to fire cues.
-
-## Reliability bar
-
-- Persistent QLab TCP, OSC 1.1, double-END SLIP
-- Serialized command queue; panic/stop preempt
-- Write + drain + `/reply` wait
-- Append-only fire log (who, source, cue, ack)
-- Idempotent command ids (double-click / MIDI bounce)
-- Mock QLab in tests; `npm run simulate-show` runs welcome → combat → panic
-
-This does not certify QLab, the LAN, or macOS. It does refuse to pretend a cue fired.
-
-## Production Maker (separate project)
-
-Preproduction authoring is **not** in this repo. It lives in the sibling `actual-play-production-maker` project (`npm run dev:maker` → http://127.0.0.1:38490). Export a `.actualplay-pack`, then import with:
-
-```ts
-createEngine({ production: { enabled: true }, vtt: { enabled: true }, qlab: { dryRun: true } })
-engine.production.importPack(zip, adminActor)
-```
-
-On this branch (`feat/production-vtt-maker`): `npm run verify:production-maker`.
-
-## Develop
-
-```bash
-cd actual-play-engine
-npm install
-npm run build
-npm test
-npm run simulate-show
-npm run simulate-vtt
-npm run verify
-```
+The bridge sends MIDI input to the engine and never controls QLab directly. The engine remains the only process allowed to fire cues.
 
 ## VTT reference console
 
-```bash
-npm run build
-npm run dev:vtt
-```
+Start the console with `npm run dev:vtt`, then sign in with one of these development-only accounts:
 
-Open `http://127.0.0.1:38480/login`. Seed users: `admin/admin`, `dm/dm`, `p1/p1`, `p2/p2`, `audience/audience`.
+| Role | Credentials |
+|---|---|
+| Admin | `admin` / `admin` |
+| DM | `dm` / `dm` |
+| Player 1 | `p1` / `p1` |
+| Player 2 | `p2` / `p2` |
+| Audience | `audience` / `audience` |
 
-Typical session:
+A typical rehearsal flow is:
 
 1. Sign in as `admin` and open Director.
-2. Click **prepare live show** (creates, publishes, instantiates, activates House map, places Ranger/Cleric/Lurker).
-3. Connect players on `/player`, audience on `/audience`, broadcast on `/broadcast`, projector on `/projector`, operator on `/operator`.
-4. Run **Preflight** before a dress. Use **Rehearsal** when QLab is dry-run.
-5. **Replay** reconstructs the session without mutating live state.
+2. Select **prepare live show** to create and activate the House map and place the seeded characters.
+3. Connect the required `/player`, `/audience`, `/broadcast`, `/projector`, and `/operator` views.
+4. Run **Preflight** before a dress rehearsal. Use **Rehearsal** while QLab is in dry-run mode.
+5. Use **Replay** to reconstruct a session without changing live state.
 
-QLab: dry-run is the default in the reference app. Point `createEngine({ qlab: { host, port } })` at a live workspace for dress rehearsal. MIDI uses `ACTION_CATALOG` through `POST /api/actualplay/midi/relay` and virtual-button press. Backup is the SQLite file `apps/vtt-reference/data/show.db` plus `data/assets`. Restore by replacing those files; migrations apply on next start.
+For live QLab, replace the reference app's dry-run configuration with `qlab: { host, port }`. Back up `apps/vtt-reference/data/show.db` and `apps/vtt-reference/data/assets`; restore them in place and restart the app so migrations can run.
 
-See `docs/VTT_ARCHITECTURE.md`, `docs/VTT_PROTOCOL.md`, `docs/VTT_SECURITY.md`, `docs/VTT_OPERATIONS.md`, `docs/VTT_TESTING.md`.
+## Production Maker
+
+Preproduction authoring lives in the sibling `../actual-play-production-maker` project:
+
+```bash
+npm run dev:maker
+```
+
+Open <http://127.0.0.1:38490>, export an `.actualplay-pack`, and import it into an engine with the production and VTT runtimes enabled:
+
+```ts
+const engine = createEngine({
+  production: { enabled: true },
+  vtt: { enabled: true },
+  qlab: { dryRun: true },
+});
+
+engine.production.importPack(zip, adminActor);
+```
+
+Run the production import checks with `npm run verify:production-maker`.
+
+## Reliability model
+
+- Persistent QLab TCP connection using OSC 1.1 and double-END SLIP framing
+- Serialized command queue with preemption for panic and stop
+- Write, drain, and `/reply` acknowledgement before success
+- Append-only fire log recording actor, source, cue, and acknowledgement
+- Idempotent command IDs for duplicate clicks and MIDI bounce
+- Mock QLab coverage; `npm run simulate-show` exercises welcome → combat → panic
+
+The engine cannot certify QLab, the network, or macOS. It can refuse to claim that an unacknowledged cue fired.
+
+## Documentation
+
+- VTT: [architecture](docs/VTT_ARCHITECTURE.md), [protocol](docs/VTT_PROTOCOL.md), [security](docs/VTT_SECURITY.md), [operations](docs/VTT_OPERATIONS.md), and [testing](docs/VTT_TESTING.md)
+- Production Maker: [architecture](docs/PRODUCTION_MAKER_ARCHITECTURE.md), [actions](docs/PRODUCTION_ACTIONS.md), [security](docs/PRODUCTION_MAKER_SECURITY.md), [operations](docs/PRODUCTION_MAKER_OPERATIONS.md), and [testing](docs/PRODUCTION_MAKER_TESTING.md)
