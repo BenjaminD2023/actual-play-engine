@@ -1,6 +1,7 @@
 import { QLabError } from '../errors.js';
 import { nowIso } from '../ids.js';
 import { cueAddress, qlabAddress } from './addresses.js';
+import { flattenQLabCues } from './cues.js';
 import { QLabTcpConnection } from './connection.js';
 import { parseQLabReply } from './reply.js';
 import type { OscArg } from './osc.js';
@@ -10,6 +11,7 @@ import type {
   QLabDriver,
   QLabHealth,
   QLabNetworkConfig,
+  QLabCueInfo,
   QLabWorkspaceInfo,
 } from './types.js';
 
@@ -72,8 +74,13 @@ export class QLabSession implements QLabDriver {
 
   async start(): Promise<void> {
     this.started = true;
-    await this.ensureConnected();
     this.startHeartbeat();
+    try {
+      await this.ensureConnected();
+    } catch (error) {
+      this.lastError = error instanceof Error ? error.message : String(error);
+      this.scheduleReconnect();
+    }
   }
 
   async stop(): Promise<void> {
@@ -138,6 +145,11 @@ export class QLabSession implements QLabDriver {
     });
   }
 
+  async listCues(): Promise<QLabCueInfo[]> {
+    const result = await this.enqueue(qlabAddress(this.workspaceId, '/cueLists'), [], 'normal');
+    return flattenQLabCues(result.data);
+  }
+
   private enqueue(address: string, args: OscArg[], priority: Priority): Promise<QLabCommandResult> {
     return new Promise((resolve, reject) => {
       const item: QueuedCommand = {
@@ -163,7 +175,24 @@ export class QLabSession implements QLabDriver {
 
     try {
       while (this.queue.length > 0 && this.started) {
-        await this.ensureConnected();
+        try {
+          await this.ensureConnected();
+        } catch (error) {
+          this.lastError = error instanceof Error ? error.message : String(error);
+          const pending = this.queue.splice(0);
+          for (const waiting of pending) {
+            waiting.resolve({
+              address: waiting.address,
+              status: 'unconfirmed',
+              data: null,
+              confirmed: false,
+              durationMs: 0,
+              error: this.lastError,
+            });
+          }
+          this.scheduleReconnect();
+          return;
+        }
         const item = this.queue.shift();
         if (!item) break;
         try {
@@ -190,7 +219,7 @@ export class QLabSession implements QLabDriver {
       }
     } finally {
       this.draining = false;
-      if (this.queue.length > 0 && this.started) {
+      if (this.queue.length > 0 && this.started && this.connection?.connected && this.authenticated) {
         void this.drain();
       }
     }

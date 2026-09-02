@@ -8,6 +8,8 @@ import {
   type UserRole,
 } from '@actualplay/engine';
 import { getRequestUser, login, requireUser, serializeSessionCookie, SESSION_COOKIE, type PublicUser } from './auth.js';
+import { handleVttRequest } from './vtt-router.js';
+import { ProtocolError } from '@actualplay/protocol';
 
 function json(data: unknown, status = 200, headers?: HeadersInit): Response {
   return new Response(JSON.stringify(data), {
@@ -23,7 +25,8 @@ function errorResponse(error: unknown): Response {
   if (error instanceof Error && error.message === 'FORBIDDEN') {
     return json({ error: 'Forbidden' }, 403);
   }
-  if (error instanceof AuthPolicyError) return json({ error: error.message }, 403);
+  if (error instanceof ProtocolError) return json(error.toJSON(), error.httpStatus);
+  if (error instanceof AuthPolicyError) return json({ error: error.message, code: 'forbidden' }, 403);
   if (error instanceof ShowCueError || error instanceof LivePlayError) {
     return json({ error: error.message }, 400);
   }
@@ -55,8 +58,12 @@ export async function handleActualPlayRequest(
     }
 
     if (head === 'auth' && rest[0] === 'logout' && method === 'POST') {
+      const cookie = request.headers.get('cookie');
+      const raw = cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${SESSION_COOKIE}=`));
+      const value = raw ? decodeURIComponent(raw.slice(SESSION_COOKIE.length + 1)) : '';
+      if (value) engine.vtt.revokeSession(value);
       return json({ ok: true }, 200, {
-        'set-cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; Max-Age=0`,
+        'set-cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
       });
     }
 
@@ -178,15 +185,31 @@ export async function handleActualPlayRequest(
       return json({ players: session ? engine.store.listPlayers(session.id) : [] });
     }
 
+    if (head === 'polls' && method === 'GET') {
+      requireUser(user, ['admin', 'dm', 'player', 'audience']);
+      const session = engine.store.getActiveSession();
+      const polls = session ? engine.store.listPolls(session.id) : [];
+      return json({
+        polls: polls.map((poll) => ({
+          ...poll,
+          options: engine.store.listPollOptions(poll.id),
+        })),
+      });
+    }
+
     if (head === 'players' && rest[1] === 'hp' && method === 'POST') {
       const actor = requireUser(user, ['admin', 'dm', 'player']);
+      const target = engine.store.getPlayer(rest[0]!);
+      if (actor.role === 'player' && target?.auth_user_id !== actor.id) throw new Error('FORBIDDEN');
       const body = (await request.json()) as { delta?: number; version?: number };
       const updated = engine.updatePlayerHp(rest[0]!, Number(body.delta ?? 0), body.version);
       return json({ player: updated });
     }
 
     if (head === 'players' && method === 'PATCH') {
-      requireUser(user, ['admin', 'dm', 'player', 'audience']);
+      const actor = requireUser(user, ['admin', 'dm', 'player']);
+      const target = engine.store.getPlayer(rest[0]!);
+      if (actor.role === 'player' && target?.auth_user_id !== actor.id) throw new Error('FORBIDDEN');
       const body = (await request.json()) as Record<string, unknown>;
       const updated = engine.patchPlayer(rest[0]!, body);
       return json({ player: updated });
@@ -216,6 +239,41 @@ export async function handleActualPlayRequest(
       return json({ poll });
     }
 
+    if (head === 'buttons' && method === 'GET' && rest.length === 0) {
+      requireUser(user, ['admin', 'dm']);
+      return json({ buttons: engine.store.listVirtualButtons() });
+    }
+
+    if (head === 'buttons' && method === 'POST' && rest.length === 0) {
+      requireUser(user, ['admin', 'dm']);
+      const body = (await request.json()) as {
+        id?: string;
+        label?: string;
+        action_type?: string;
+        action_data?: Record<string, unknown>;
+        color?: string;
+        key_bind?: string;
+        position?: number;
+      };
+      const button = engine.store.upsertVirtualButton({
+        id: body.id ?? crypto.randomUUID(),
+        position: Number(body.position ?? engine.store.listVirtualButtons().length),
+        label: String(body.label ?? 'Button'),
+        color: String(body.color ?? '#444'),
+        action_type: String(body.action_type ?? ''),
+        action_data: body.action_data ?? {},
+        key_bind: String(body.key_bind ?? ''),
+        is_active: true,
+      });
+      return json({ button });
+    }
+
+    if (head === 'buttons' && rest[1] === 'press' && method === 'POST') {
+      requireUser(user, ['admin', 'dm']);
+      const result = await engine.pressVirtualButton(rest[0]!, user!.role);
+      return json({ result }, result?.ok ? 200 : result?.status === 'unconfirmed' ? 202 : 400);
+    }
+
     if (head === 'actions' && rest[1] === 'trigger' && method === 'POST') {
       const actor = requireUser(user, ['admin', 'dm', 'player', 'audience']);
       const result = await engine.dispatch({
@@ -228,9 +286,14 @@ export async function handleActualPlayRequest(
       return json(result, result.ok ? 200 : 502);
     }
 
+    if (head === 'vtt') {
+      const handled = await handleVttRequest(engine, request, rest, user);
+      if (handled) return handled;
+    }
+
     if (head === 'events' && method === 'GET') {
       requireUser(user);
-      return sse(engine, user);
+      return sse(engine, user, request);
     }
 
     if (head === 'midi' && rest[0] === 'stream' && method === 'GET') {
@@ -244,15 +307,25 @@ export async function handleActualPlayRequest(
   }
 }
 
-function sse(engine: ActualPlayEngine, _user: PublicUser | null): Response {
+function sse(engine: ActualPlayEngine, user: PublicUser | null, request?: Request): Response {
   const encoder = new TextEncoder();
+  const lastEventId = request?.headers.get('last-event-id');
+  const after = lastEventId ? Number(lastEventId) : 0;
   const stream = new ReadableStream({
     start(controller) {
-      const send = (event: unknown) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      const send = (event: unknown, id?: number) => {
+        const prefix = id !== undefined ? `id: ${id}\n` : '';
+        controller.enqueue(encoder.encode(`${prefix}data: ${JSON.stringify(event)}\n\n`));
       };
-      send({ type: 'hello', health: engine.health() });
-      const unsubscribe = engine.events.subscribe((event) => send(event));
+      const sessionId = engine.store.getActiveSession()?.id;
+      send({
+        type: 'hello',
+        health: engine.health(),
+        lastEventSequence: sessionId ? engine.vtt.tables.lastSequence(sessionId) : 0,
+        replay: sessionId && after > 0 ? engine.vtt.eventsSince(sessionId, after) : [],
+        userId: user?.id ?? null,
+      });
+      const unsubscribe = engine.events.subscribe((event) => send(event, event.id));
       const heartbeat = setInterval(() => send({ type: 'ping' }), 15000);
       return () => {
         clearInterval(heartbeat);

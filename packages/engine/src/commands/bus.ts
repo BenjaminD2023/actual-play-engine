@@ -13,11 +13,15 @@ export class CommandBus {
   private recent = new Map<string, { at: number; result: CommandResult }>();
 
   constructor(
-    private readonly qlab: QLabDriver,
+    private qlab: QLabDriver,
     private readonly cues: ShowCues,
     private readonly store: EngineStore,
     private readonly events: EngineEventBus
   ) {}
+
+  setQLabDriver(qlab: QLabDriver): void {
+    this.qlab = qlab;
+  }
 
   async dispatch(command: EngineCommand): Promise<CommandResult> {
     const cached = this.recent.get(command.id);
@@ -87,11 +91,20 @@ export class CommandBus {
           return this.wrap(command.type, command.id, await this.qlab.send(address, args));
         }
         default:
+          if (command.type.startsWith('combat.') || command.type === 'player.action') {
+            return {
+              commandId: command.id,
+              type: command.type,
+              ok: true,
+              status: 'ok',
+            };
+          }
           return {
             commandId: command.id,
             type: command.type,
-            ok: true,
-            status: 'ok',
+            ok: false,
+            status: 'error',
+            error: `Unknown command type: ${command.type}`,
           };
       }
     } catch (error) {

@@ -1,5 +1,8 @@
 node_modules/
 dist/
+.next/
+test-results/
+playwright-report/
 *.db
 *.db-shm
 *.db-wal

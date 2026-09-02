@@ -86,8 +86,16 @@ describe('QLabSession', () => {
 
   it('rejects a bad passcode', async () => {
     const { host, port } = await startMock({ passcode: 'right' });
-    const session = new QLabSession({ host, port, passcode: 'wrong', heartbeatIntervalMs: 60_000 });
-    await expect(session.start()).rejects.toThrow(/passcode|badpass/i);
+    const session = new QLabSession({
+      host,
+      port,
+      passcode: 'wrong',
+      heartbeatIntervalMs: 60_000,
+      reconnectMinMs: 10_000,
+    });
+    await session.start();
+    expect(session.health().connected).toBe(false);
+    expect(session.health().lastError || '').toMatch(/passcode|badpass/i);
     await session.stop();
   });
 

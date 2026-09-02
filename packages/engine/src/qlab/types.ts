@@ -20,6 +20,14 @@ export interface QLabWorkspaceInfo {
   version?: string;
 }
 
+export interface QLabCueInfo {
+  uniqueID?: string;
+  number: string;
+  name: string;
+  type?: string;
+  listName?: string;
+}
+
 export type QLabAckStatus = 'ok' | 'error' | 'denied' | 'badpass' | 'unconfirmed';
 
 export interface QLabCommandResult {
@@ -59,6 +67,7 @@ export interface QLabDriver {
   reset(): Promise<QLabCommandResult>;
   send(address: string, args?: OscArg[]): Promise<QLabCommandResult>;
   listWorkspaces(): Promise<QLabWorkspaceInfo[]>;
+  listCues(): Promise<QLabCueInfo[]>;
 }
 
 export interface QLabReplyEnvelope<T = unknown> {

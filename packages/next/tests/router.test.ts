@@ -1,7 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createEngine, createId, nowIso } from '@actualplay/engine';
 import { bootstrapAdmin } from '../src/auth.js';
 import { handleActualPlayRequest } from '../src/router.js';
+
+const dirs: string[] = [];
+afterEach(() => {
+  while (dirs.length) {
+    const dir = dirs.pop();
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe('Next adapter router', () => {
   it('rejects unauthenticated cue fires and accepts an admin session', async () => {
@@ -74,5 +85,146 @@ describe('Next adapter router', () => {
   it('ignores unused helper imports for typecheck', () => {
     expect(createId().length).toBeGreaterThan(0);
     expect(nowIso()).toContain('T');
+  });
+
+  it('blocks a cross-origin VTT command', async () => {
+    const engine = createEngine({ qlab: { dryRun: true }, cues: { 'show.welcome': '1' }, vtt: { enabled: true } });
+    await engine.start();
+    await bootstrapAdmin(engine, { username: 'admin', password: 'secret' });
+    const login = await handleActualPlayRequest(
+      engine,
+      new Request('http://127.0.0.1/api/actualplay/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: 'admin', password: 'secret' }),
+      }),
+      ['auth', 'login']
+    );
+    const cookie = login.headers.get('set-cookie') ?? '';
+    const blocked = await handleActualPlayRequest(
+      engine,
+      new Request('http://127.0.0.1/api/actualplay/vtt/commands', {
+        method: 'POST',
+        headers: { cookie, origin: 'http://evil.example', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'cmd-x',
+          protocolVersion: 1,
+          type: 'ping.create',
+          sessionId: 's',
+          payload: { x: 1, y: 1 },
+        }),
+      }),
+      ['vtt', 'commands']
+    );
+    expect(blocked.status).toBe(403);
+    await engine.stop();
+  });
+
+  it('rejects a forged JSON session cookie', async () => {
+    const engine = createEngine({ qlab: { dryRun: true }, cues: { 'show.welcome': '1' } });
+    await engine.start();
+    await bootstrapAdmin(engine, { username: 'admin', password: 'secret' });
+    const forged = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/qlab/health', {
+        headers: {
+          cookie: `actualplay_session=${encodeURIComponent(JSON.stringify({ userId: 'nope', role: 'admin', expires: Date.now() + 99999 }))}`,
+        },
+      }),
+      ['qlab', 'health']
+    );
+    expect(forged.status).toBe(401);
+    await engine.stop();
+  });
+
+  it('presses a virtual button through the VTT action catalog', async () => {
+    const engine = createEngine({
+      qlab: { dryRun: true },
+      cues: { 'show.welcome': '1' },
+      vtt: { enabled: true },
+    });
+    await engine.start();
+    await bootstrapAdmin(engine, { username: 'admin', password: 'secret' });
+    const login = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: 'admin', password: 'secret' }),
+      }),
+      ['auth', 'login']
+    );
+    const cookie = login.headers.get('set-cookie') ?? '';
+    const created = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/buttons', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'Mark', action_type: 'recording_marker', action_data: { label: 'http-btn' } }),
+      }),
+      ['buttons']
+    );
+    expect(created.status).toBe(200);
+    const { button } = (await created.json()) as { button: { id: string } };
+    const pressed = await handleActualPlayRequest(
+      engine,
+      new Request(`http://localhost/api/actualplay/buttons/${button.id}/press`, {
+        method: 'POST',
+        headers: { cookie },
+      }),
+      ['buttons', button.id, 'press']
+    );
+    expect(pressed.status).toBe(200);
+    const session = engine.store.getActiveSession()!;
+    expect(engine.vtt.tables.listMarkers(session.id).some((row) => row.label === 'http-btn')).toBe(true);
+    await engine.stop();
+  });
+
+  it('serves uploaded map bytes, not a pooled Buffer ArrayBuffer', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vtt-asset-get-'));
+    dirs.push(dir);
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    expect(png.byteLength).toBeLessThan(100);
+    const engine = createEngine({
+      qlab: { dryRun: true },
+      cues: { 'show.welcome': '1' },
+      vtt: { enabled: true, assetRoot: dir },
+    });
+    await engine.start();
+    await bootstrapAdmin(engine, { username: 'admin', password: 'secret' });
+    const login = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: 'admin', password: 'secret' }),
+      }),
+      ['auth', 'login']
+    );
+    const cookie = login.headers.get('set-cookie') ?? '';
+    const uploaded = await handleActualPlayRequest(
+      engine,
+      new Request('http://localhost/api/actualplay/vtt/assets', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'map.png', mime: 'image/png', data: png.toString('base64') }),
+      }),
+      ['vtt', 'assets']
+    );
+    expect(uploaded.status).toBe(200);
+    const { asset } = (await uploaded.json()) as { asset: { id: string } };
+    const got = await handleActualPlayRequest(
+      engine,
+      new Request(`http://localhost/api/actualplay/vtt/assets/${asset.id}?variant=display`, {
+        headers: { cookie },
+      }),
+      ['vtt', 'assets', asset.id]
+    );
+    expect(got.status).toBe(200);
+    expect(got.headers.get('content-type')).toBe('image/png');
+    const body = Buffer.from(await got.arrayBuffer());
+    expect(body.byteLength).toBe(png.byteLength);
+    expect(body.equals(png)).toBe(true);
+    await engine.stop();
   });
 });

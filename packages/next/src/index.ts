@@ -3,6 +3,7 @@ export { handleActualPlayRequest } from './router.js';
 export { actualPlayMiddleware, actualPlayMiddlewareMatcher } from './middleware.js';
 export {
   bootstrapAdmin,
+  bootstrapUser,
   login,
   getRequestUser,
   parseSessionCookie,
@@ -15,3 +16,5 @@ export {
   fireShowCue,
   panic,
 } from './hooks.js';
+export { handleVttRequest } from './vtt-router.js';
+export { useVttSnapshot, sendVttCommand } from './vtt-hooks.js';

@@ -3,14 +3,23 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
+    "packages/protocol",
     "packages/engine",
     "packages/next",
-    "apps/bridge"
+    "packages/vtt",
+    "apps/bridge",
+    "apps/vtt-reference"
   ],
   "scripts": {
-    "build": "npm run build -w @actualplay/engine && npm run build -w @actualplay/next",
-    "test": "npm run test -w @actualplay/engine && npm run test -w @actualplay/next && npm run test -w @actualplay/bridge",
-    "simulate-show": "npm run simulate-show -w @actualplay/engine"
+    "build": "npm run build -w @actualplay/protocol && npm run build -w @actualplay/engine && npm run build -w @actualplay/next && npm run build -w @actualplay/vtt --if-present && npm run build -w @actualplay/vtt-reference --if-present",
+    "test": "npm run test -w @actualplay/protocol && npm run test -w @actualplay/engine && npm run test -w @actualplay/next && npm run test -w @actualplay/bridge && npm run test -w @actualplay/vtt && npm run test -w @actualplay/vtt-reference",
+    "typecheck": "npm run build",
+    "lint": "node scripts/lint.mjs",
+    "simulate-show": "npm run simulate-show -w @actualplay/engine",
+    "simulate-vtt": "npm run test -w @actualplay/engine -- tests/vtt-simulate.test.ts",
+    "test:e2e": "npm run test:e2e -w @actualplay/vtt-reference",
+    "dev:vtt": "npm run dev -w @actualplay/vtt-reference --if-present",
+    "verify": "npm run build && npm run lint && npm test && npm run simulate-show && npm run simulate-vtt && npm run test:e2e"
   },
   "engines": {
     "node": ">=18.18.0"

@@ -14,9 +14,11 @@ export type {
   QLabHealth,
   QLabNetworkConfig,
   QLabCommandResult,
+  QLabCueInfo,
   QLabWorkspaceInfo,
   QLabAckStatus,
 } from './qlab/types.js';
+export { flattenQLabCues } from './qlab/cues.js';
 
 export { CommandBus } from './commands/bus.js';
 export type { EngineCommand, CommandResult, CommandMeta, CommandType, FireLogEntry } from './commands/types.js';
@@ -66,3 +68,6 @@ export type { MidiEvent, MidiKeybind } from './midi/protocol.js';
 export { memoryStore, MemoryStore } from './store/memory.js';
 export { sqliteStore, SqliteStore } from './store/sqlite.js';
 export type { EngineStore, EngineConfig, PlayerRecord, SessionRecord, PollRecord } from './store/types.js';
+export { VttRuntime } from './vtt/runtime.js';
+export { ACTION_CATALOG, isRegisteredAction } from './vtt/actions.js';
+export { runMigrations, migrationStatus } from './store/migrations.js';

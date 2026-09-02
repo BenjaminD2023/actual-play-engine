@@ -30,20 +30,24 @@ import type { QLabDriver, QLabNetworkConfig } from './qlab/types.js';
 import { ShowCues, type ShowCueMap } from './show/cues.js';
 import { memoryStore } from './store/memory.js';
 import type { EngineStore, PlayerRecord, PollOptionRecord, PollRecord } from './store/types.js';
+import { VttRuntime, type VttRuntimeOptions } from './vtt/runtime.js';
+import { isRegisteredAction } from './vtt/actions.js';
 
 export interface EngineOptions {
   store?: EngineStore;
   qlab?: QLabNetworkConfig | { dryRun: true };
   cues?: ShowCueMap;
   midiDedupeMs?: number;
+  vtt?: VttRuntimeOptions;
 }
 
 export class ActualPlayEngine {
   readonly events = new EngineEventBus();
   readonly store: EngineStore;
-  readonly qlab: QLabDriver;
+  qlab: QLabDriver;
   readonly cues: ShowCues;
   readonly commands: CommandBus;
+  readonly vtt: VttRuntime;
   private readonly midiDedupe: MidiDedupe;
 
   constructor(options: EngineOptions = {}) {
@@ -62,9 +66,27 @@ export class ActualPlayEngine {
       : new QLabSession(options.qlab ?? stored.qlab);
     this.commands = new CommandBus(this.qlab, this.cues, this.store, this.events);
     this.midiDedupe = new MidiDedupe(options.midiDedupeMs);
+    this.vtt = new VttRuntime(this, options.vtt ?? { enabled: false });
   }
 
   async start(): Promise<void> {
+    try {
+      await this.qlab.start();
+    } catch (error) {
+      if (this.qlab.kind === 'dry-run') throw error;
+    }
+    this.events.emit('qlab.health', this.qlab.health());
+  }
+
+  async applyQLabConfig(config: QLabNetworkConfig | { dryRun: true }): Promise<void> {
+    await this.qlab.stop();
+    if (isDryRun(config)) {
+      this.qlab = new DryRunQLab();
+    } else {
+      this.store.setQLabConfig(config);
+      this.qlab = new QLabSession(config);
+    }
+    this.commands.setQLabDriver(this.qlab);
     await this.qlab.start();
     this.events.emit('qlab.health', this.qlab.health());
   }
@@ -76,7 +98,7 @@ export class ActualPlayEngine {
 
   health() {
     return {
-      qlab: this.qlab.health(),
+      qlab: { ...this.qlab.health(), kind: this.qlab.kind },
       cues: this.cues.list(),
     };
   }
@@ -124,6 +146,10 @@ export class ActualPlayEngine {
       return null;
     }
 
+    if (this.vtt.enabled && isRegisteredAction(actionType)) {
+      return this.dispatchRegisteredAction(actionType, actionData, source);
+    }
+
     const combat = getCombatAction(actionType);
     if (combat) {
       return this.dispatch(
@@ -146,6 +172,40 @@ export class ActualPlayEngine {
         args: actionData.args,
       })
     );
+  }
+
+  async pressVirtualButton(id: string, source: CommandSource = 'system'): Promise<CommandResult | null> {
+    const button = this.store.listVirtualButtons().find((item) => item.id === id);
+    if (!button || !button.is_active) {
+      throw new LivePlayError('not_found', `Virtual button ${id} is missing or inactive.`);
+    }
+    if (this.vtt.enabled && isRegisteredAction(button.action_type)) {
+      return this.dispatchRegisteredAction(button.action_type, button.action_data, source);
+    }
+    return this.ingestMidi({ actionType: button.action_type, actionData: button.action_data }, source);
+  }
+
+  private async dispatchRegisteredAction(
+    actionType: string,
+    actionData: Record<string, unknown>,
+    source: CommandSource
+  ): Promise<CommandResult> {
+    const session = this.store.getActiveSession() ?? this.ensureSession();
+    const role = source === 'bridge' || source === 'midi' || source === 'system' ? source : source;
+    const actor = this.vtt.actorFrom({ userId: null, role });
+    const outcome = await this.vtt.handleRegisteredAction(actionType, actionData, actor, session.id);
+    const qlab = outcome.result.qlab as CommandResult['qlab'] | undefined;
+    const status = qlab?.status ?? (outcome.ok ? 'ok' : 'error');
+    return {
+      commandId: createId(),
+      type: 'vtt.action',
+      ok: Boolean(outcome.ok) && (qlab ? Boolean(qlab.confirmed) && qlab.status === 'ok' : true),
+      qlab,
+      status,
+      cueName: typeof actionData.cueName === 'string' ? actionData.cueName : undefined,
+      cueNumber: typeof actionData.cueNumber === 'string' ? actionData.cueNumber : undefined,
+      error: qlab?.error,
+    };
   }
 
   isTriggeringNote(event: MidiEvent): boolean {

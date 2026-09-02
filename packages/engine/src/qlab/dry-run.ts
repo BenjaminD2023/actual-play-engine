@@ -1,7 +1,7 @@
 import { nowIso } from '../ids.js';
 import { cueAddress, qlabAddress } from './addresses.js';
 import type { OscArg } from './osc.js';
-import type { QLabCommandResult, QLabDriver, QLabHealth, QLabNetworkConfig, QLabWorkspaceInfo } from './types.js';
+import type { QLabCommandResult, QLabCueInfo, QLabDriver, QLabHealth, QLabNetworkConfig, QLabWorkspaceInfo } from './types.js';
 
 export interface DryRunFire {
   address: string;
@@ -83,6 +83,10 @@ export class DryRunQLab implements QLabDriver {
         version: 'dry-run',
       },
     ];
+  }
+
+  async listCues(): Promise<QLabCueInfo[]> {
+    return [];
   }
 
   private record(address: string, args: OscArg[] = []): QLabCommandResult {
