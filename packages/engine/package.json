@@ -17,6 +17,10 @@
     "./vtt": {
       "types": "./dist/vtt/index.d.ts",
       "import": "./dist/vtt/index.js"
+    },
+    "./production": {
+      "types": "./dist/production/index.d.ts",
+      "import": "./dist/production/index.js"
     }
   },
   "files": [

@@ -1,5 +1,5 @@
 import type { ActorContext, ProjectedLiveScene, TokenRecord, VttSnapshot, ViewerKind } from '@actualplay/protocol';
-import { PROTOCOL_VERSION } from '@actualplay/protocol';
+import { PROTOCOL_VERSION, isPointRevealed } from '@actualplay/protocol';
 import { hasLineOfSight, inVisionCone } from './geometry.js';
 import type { InstanceRow } from './tables.js';
 import type { InitiativeRecord, PlayerRecord } from '../store/types.js';
@@ -25,7 +25,8 @@ export function projectInstance(
     aggregateVersion: instance?.version ?? 0,
     lastEventSequence: extras.lastEventSequence,
     live,
-    assets: extras.assets,
+    assets: extras.assets.filter(asset => canSeeHidden || asset.id === live?.mapAssetId || live?.tokens.some(token => token.assetId === asset.id))
+      .map(asset => ({ ...asset, createdBy: null, variants: asset.variants.map(variant => ({ ...variant, path: '' })) })),
     connection: {
       viewer: actor.viewer,
       userId: actor.userId,
@@ -52,7 +53,6 @@ function projectLive(
   );
   const openDoorWalls = new Set(state.doors.filter((door) => door.state === 'open').map((door) => door.wallId));
   const visionWalls = state.walls.filter((wall) => {
-    if (wall.dmOnly && !canSeeHidden) return false;
     return wall.blockingVision;
   });
 
@@ -61,12 +61,13 @@ function projectLive(
     const ownsHidden =
       Boolean(actor.userId) && token.ownerUserId === actor.userId;
     if (token.visibility === 'hidden' && !canSeeHidden && !ownsHidden) continue;
-    if (!canSeeHidden && observer && token.id !== observer.id && token.vision.enabled) {
+    if (!canSeeHidden && observer && token.id !== observer.id && observer.vision.enabled) {
       const origin = { x: observer.x, y: observer.y };
       const target = { x: token.x, y: token.y };
       if (!inVisionCone(origin, target, observer.vision.distance, observer.vision.angle, observer.rotation)) continue;
       if (!hasLineOfSight(origin, target, visionWalls, openDoorWalls)) continue;
     }
+    if (!canSeeHidden && !ownsHidden && !(actor.playerId && token.playerId === actor.playerId) && !isPointRevealed(state.fog, token)) continue;
     if (!canSeeHidden) token.dmLabel = null;
     if (token.playerId) {
       const player = extras.players.find((row) => row.id === token.playerId);
@@ -105,7 +106,7 @@ function projectLive(
     walls,
     doors,
     lights: state.lights,
-    fog: canSeeHidden ? state.fog : state.fog.filter((op) => op.kind !== 'hide'),
+    fog: canSeeHidden ? state.fog : state.fog.map((op, index) => ({ ...op, id: `fog-${index}`, actorId: null })),
     annotations,
     templates: state.templates,
     terrain: state.terrain,

@@ -96,3 +96,5 @@ export {
   optionalBoolean,
   optionalFiniteNumber,
 } from './validate.js';
+
+export { fogContains, isPointRevealed } from './fog.js';

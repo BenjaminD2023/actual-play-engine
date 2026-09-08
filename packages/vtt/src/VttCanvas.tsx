@@ -1,375 +1,219 @@
-import { useEffect, useRef } from 'react';
-import { Application, Container, Graphics, Sprite, Texture, FederatedPointerEvent } from 'pixi.js';
-import type { ProjectedLiveScene } from '@actualplay/protocol';
+import { useEffect, useRef, useState } from 'react';
+import { Application, Container, Graphics, Sprite, Text, Texture, type FederatedPointerEvent } from 'pixi.js';
+import type { FogOperation, Point, ProjectedLiveScene, TokenRecord } from '@actualplay/protocol';
 import { LAYER_ORDER, clampCamera, screenToWorld, tokenAtWorld, type Camera } from './layers.js';
-import { assetUrl, fogDrawList, gridDrawModel, terrainDrawList } from './draw-model.js';
+import { assetUrl, fogPolygon, gridDrawModel, terrainPolygon } from './draw-model.js';
 
-export interface OverlayPing {
-  x: number;
-  y: number;
-}
-
-export interface OverlayRuler {
-  a: { x: number; y: number };
-  b: { x: number; y: number };
-}
-
+export interface OverlayPing { x: number; y: number; }
+export interface OverlayRuler { a: Point; b: Point; }
 export interface VttCanvasProps {
   live: ProjectedLiveScene | null;
   camera?: Camera;
   onMoveToken?: (tokenId: string, x: number, y: number) => void;
   onCamera?: (camera: Camera) => void;
+  onRegion?: (a: Point, b: Point, kind: 'reveal' | 'hide') => void;
+  onSelectToken?: (id: string) => void;
+  canMoveToken?: (token: TokenRecord) => boolean;
+  tool?: 'select' | 'reveal' | 'hide';
+  assetBaseUrl?: string;
+  showHidden?: boolean;
+  lockCamera?: boolean;
   reducedMotion?: boolean;
   interactive?: boolean;
   pings?: OverlayPing[];
   ruler?: OverlayRuler | null;
 }
 
+/** One renderer for every show app; authority and role projection remain on the server. */
 export function VttCanvas(props: VttCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
+  const current = useRef(props); current.current = props;
   const appRef = useRef<Application | null>(null);
-  const layersRef = useRef<Map<string, Container>>(new Map());
-  const liveRef = useRef(props.live);
-  const cameraRef = useRef<Camera>(clampCamera(props.camera ?? props.live?.camera ?? { x: 0, y: 0, zoom: 1, rotation: 0 }));
-  const moveRef = useRef(props.onMoveToken);
-  const onCameraRef = useRef(props.onCamera);
-  const pingRef = useRef(props.pings ?? []);
-  const rulerRef = useRef(props.ruler ?? null);
-  const dragPreviewRef = useRef<{ id: string; x: number; y: number } | null>(null);
-  const interactiveRef = useRef(props.interactive);
-  liveRef.current = props.live;
-  interactiveRef.current = props.interactive;
-  moveRef.current = props.onMoveToken;
-  onCameraRef.current = props.onCamera;
-  pingRef.current = props.pings ?? [];
-  rulerRef.current = props.ruler ?? null;
-  if (props.camera) cameraRef.current = clampCamera(props.camera);
+  const textures = useRef(new Map<string, Texture>());
+  const repaint = useRef<() => void>(() => undefined);
+  const camera = useRef<Camera>({ x: 0, y: 0, zoom: 1, rotation: 0 });
+  const [error, setError] = useState('');
+  const cameraKey = JSON.stringify(props.camera ?? props.live?.camera);
 
   useEffect(() => {
-    const el = host.current;
-    if (!el) return;
-    let cancelled = false;
+    camera.current = clampCamera(current.current.camera ?? current.current.live?.camera ?? camera.current);
+    repaint.current();
+  }, [cameraKey, props.live?.instanceId]);
+
+  useEffect(() => {
+    const abort = new AbortController();
+    const needed = new Set<string>();
+    if (props.live?.mapAssetId) needed.add(props.live.mapAssetId);
+    for (const token of props.live?.tokens ?? []) if (token.assetId) needed.add(token.assetId);
+    for (const [id, texture] of textures.current) if (!needed.has(id)) { texture.destroy(true); textures.current.delete(id); }
+    for (const id of needed) {
+      if (textures.current.has(id)) continue;
+      const url = id.startsWith('/portraits/') ? id : assetUrl(id, props.assetBaseUrl ?? '/api/actualplay')!;
+      void fetch(url, { credentials: 'include', signal: abort.signal }).then(async response => {
+        if (!response.ok) throw new Error(`Map/portrait request failed (${response.status}).`);
+        const bitmap = await createImageBitmap(await response.blob());
+        if (abort.signal.aborted) { bitmap.close(); return; }
+        textures.current.set(id, Texture.from(bitmap));
+        setError(''); repaint.current();
+      }).catch(reason => { if (!abort.signal.aborted) setError(reason instanceof Error ? reason.message : 'Asset loading failed.'); });
+    }
+    return () => abort.abort();
+  }, [props.assetBaseUrl, props.live?.mapAssetId, JSON.stringify(props.live?.tokens.map(token => token.assetId))]);
+
+  useEffect(() => {
+    const element = host.current;
+    if (!element) return;
     const app = new Application();
-    void app
-      .init({ background: '#141414', resizeTo: el, antialias: true, preference: 'webgl' })
-      .then(() => {
-        if (cancelled) {
-          app.destroy();
-          return;
+    const layers = new Map<string, Container>();
+    let disposed = false, initialized = false, frame = 0;
+    let drag: { id: string; at: Point } | null = null;
+    let region: { a: Point; b: Point; kind: 'reveal' | 'hide' } | null = null;
+    let pan: { at: Point; camera: Camera } | null = null;
+    let fogKey = '', fogTexture: Texture | null = null;
+    const fogCanvas = document.createElement('canvas');
+    const resizeObserver = new ResizeObserver(() => { if (initialized && !disposed) { app.resize(); repaint.current(); } });
+    resizeObserver.observe(element);
+    const schedule = () => { if (!frame && initialized && !disposed) frame = requestAnimationFrame(paint); };
+    repaint.current = schedule;
+    const world = (event: FederatedPointerEvent) => screenToWorld(event.global, camera.current);
+    const updateCamera = (next: Camera) => { camera.current = clampCamera(next); current.current.onCamera?.(camera.current); schedule(); };
+    const onWheel = (event: WheelEvent) => {
+      if (current.current.lockCamera) return;
+      event.preventDefault();
+      const bounds = app.canvas.getBoundingClientRect();
+      const screen = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+      const before = screenToWorld(screen, camera.current);
+      const next = clampCamera({ ...camera.current, zoom: camera.current.zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1) });
+      updateCamera({ ...next, x: before.x - screen.x / next.zoom, y: before.y - screen.y / next.zoom });
+    };
+    const end = () => {
+      if (region) current.current.onRegion?.(region.a, region.b, region.kind);
+      if (drag) current.current.onMoveToken?.(drag.id, drag.at.x, drag.at.y);
+      drag = null; region = null; pan = null; schedule();
+    };
+    const cancel = () => { drag = null; region = null; pan = null; schedule(); };
+    void app.init({ background: '#171a1d', resizeTo: element, antialias: true, preference: 'webgl', resolution: window.devicePixelRatio || 1, autoDensity: true }).then(() => {
+      initialized = true;
+      if (disposed) { app.destroy(true, { children: true }); return; }
+      appRef.current = app;
+      element.appendChild(app.canvas);
+      app.canvas.dataset.testid = 'vtt-surface';
+      app.canvas.style.touchAction = 'none';
+      for (const name of LAYER_ORDER) { const layer = new Container(); layer.label = name; layers.set(name, layer); app.stage.addChild(layer); }
+      app.stage.eventMode = 'static'; app.stage.hitArea = app.screen;
+      app.stage.on('pointerdown', (event: FederatedPointerEvent) => {
+        if (!current.current.live) return;
+        const at = world(event);
+        if (current.current.interactive && current.current.tool && current.current.tool !== 'select') { region = { a: at, b: at, kind: current.current.tool }; return; }
+        const id = tokenAtWorld(current.current.live.tokens, at);
+        if (id) {
+          current.current.onSelectToken?.(id);
+          const token = current.current.live.tokens.find(item => item.id === id)!;
+          if (current.current.onMoveToken && !token.locked && (current.current.canMoveToken?.(token) ?? true)) { drag = { id, at }; return; }
         }
-        appRef.current = app;
-        el.appendChild(app.canvas as HTMLCanvasElement);
-        (app.canvas as HTMLCanvasElement).dataset.testid = 'vtt-surface';
-        const layers = new Map<string, Container>();
-        for (const name of LAYER_ORDER) {
-          const layer = new Container();
-          layer.label = name;
-          layers.set(name, layer);
-          app.stage.addChild(layer);
-        }
-        layersRef.current = layers;
-        app.stage.eventMode = 'static';
-        app.stage.hitArea = app.screen;
-        let dragging: { id: string } | null = null;
-        let panning: { x: number; y: number; camX: number; camY: number } | null = null;
-        let rulerStart: { x: number; y: number } | null = null;
-        let pointers = new Map<number, { x: number; y: number }>();
-
-        const worldFromEvent = (event: FederatedPointerEvent) => {
-          const cam = cameraRef.current;
-          const local = event.getLocalPosition(app.stage);
-          return screenToWorld({ x: local.x, y: local.y }, cam);
-        };
-
-        app.stage.on('pointerdown', (event: FederatedPointerEvent) => {
-          const live = liveRef.current;
-          if (!live) return;
-          const world = worldFromEvent(event);
-          pointers.set(event.pointerId, { x: event.global.x, y: event.global.y });
-          if (event.shiftKey) {
-            rulerStart = world;
-            rulerRef.current = { a: world, b: world };
-            paint();
-            return;
-          }
-          if (interactiveRef.current || moveRef.current) {
-            const id = tokenAtWorld(live.tokens, world);
-            if (id) {
-              dragging = { id };
-              dragPreviewRef.current = { id, x: world.x, y: world.y };
-              paint();
-              return;
-            }
-          }
-          panning = { x: event.global.x, y: event.global.y, camX: cameraRef.current.x, camY: cameraRef.current.y };
-        });
-        app.stage.on('pointermove', (event: FederatedPointerEvent) => {
-          pointers.set(event.pointerId, { x: event.global.x, y: event.global.y });
-          if (pointers.size === 2) {
-            const pts = [...pointers.values()];
-            const dx = pts[0]!.x - pts[1]!.x;
-            const dy = pts[0]!.y - pts[1]!.y;
-            const dist = Math.hypot(dx, dy);
-            const prev = (app.stage as unknown as { __pinch?: number }).__pinch;
-            (app.stage as unknown as { __pinch?: number }).__pinch = dist;
-            if (prev && prev > 0) {
-              const factor = dist / prev;
-              cameraRef.current = clampCamera({ ...cameraRef.current, zoom: cameraRef.current.zoom * factor });
-              onCameraRef.current?.(cameraRef.current);
-              paint();
-            }
-            return;
-          }
-          const world = worldFromEvent(event);
-          if (rulerStart) {
-            rulerRef.current = { a: rulerStart, b: world };
-            paint();
-            return;
-          }
-          if (dragging) {
-            dragPreviewRef.current = { id: dragging.id, x: world.x, y: world.y };
-            paint();
-            return;
-          }
-          if (panning) {
-            const zoom = cameraRef.current.zoom;
-            cameraRef.current = clampCamera({
-              ...cameraRef.current,
-              x: panning.camX - (event.global.x - panning.x) / zoom,
-              y: panning.camY - (event.global.y - panning.y) / zoom,
-            });
-            onCameraRef.current?.(cameraRef.current);
-            paint();
-          }
-        });
-        const endPointer = (event: FederatedPointerEvent) => {
-          pointers.delete(event.pointerId);
-          (app.stage as unknown as { __pinch?: number }).__pinch = undefined;
-          const world = worldFromEvent(event);
-          if (rulerStart) {
-            rulerStart = null;
-            paint();
-            return;
-          }
-          if (dragging) {
-            moveRef.current?.(dragging.id, world.x, world.y);
-            dragging = null;
-            dragPreviewRef.current = null;
-            paint();
-            return;
-          }
-          panning = null;
-        };
-        app.stage.on('pointerup', endPointer);
-        app.stage.on('pointerupoutside', endPointer);
-        app.stage.on('pointertap', (event: FederatedPointerEvent) => {
-          if (event.detail === 2 || event.altKey) {
-            const world = worldFromEvent(event);
-            pingRef.current = [...pingRef.current, world].slice(-8);
-            paint();
-          }
-        });
-
-        const canvas = app.canvas as HTMLCanvasElement;
-        const onWheel = (ev: WheelEvent) => {
-          ev.preventDefault();
-          const cam = cameraRef.current;
-          const factor = ev.deltaY < 0 ? 1.08 : 1 / 1.08;
-          const rect = canvas.getBoundingClientRect();
-          const before = screenToWorld({ x: ev.clientX - rect.left, y: ev.clientY - rect.top }, cam);
-          const next = clampCamera({ ...cam, zoom: cam.zoom * factor });
-          const after = screenToWorld({ x: ev.clientX - rect.left, y: ev.clientY - rect.top }, next);
-          cameraRef.current = clampCamera({
-            ...next,
-            x: cam.x + (before.x - after.x),
-            y: cam.y + (before.y - after.y),
-          });
-          onCameraRef.current?.(cameraRef.current);
-          paint();
-        };
-        canvas.addEventListener('wheel', onWheel, { passive: false });
-        (canvas as unknown as { __onWheel?: typeof onWheel }).__onWheel = onWheel;
-
-        paint();
+        if (!current.current.lockCamera) pan = { at: { ...event.global }, camera: { ...camera.current } };
       });
+      app.stage.on('pointermove', (event: FederatedPointerEvent) => {
+        if (region) region.b = world(event);
+        else if (drag) drag.at = world(event);
+        else if (pan) updateCamera({ ...pan.camera, x: pan.camera.x - (event.global.x - pan.at.x) / camera.current.zoom, y: pan.camera.y - (event.global.y - pan.at.y) / camera.current.zoom });
+        if (region || drag) schedule();
+      });
+      app.stage.on('pointerup', end); app.stage.on('pointerupoutside', end); app.stage.on('pointercancel', cancel);
+      app.canvas.addEventListener('wheel', onWheel, { passive: false });
+      window.addEventListener('resize', schedule);
+      schedule();
+    }).catch(reason => { if (!disposed) setError(reason instanceof Error ? reason.message : 'WebGL initialization failed.'); });
 
     function paint() {
-      renderScene(
-        layersRef.current,
-        liveRef.current,
-        cameraRef.current,
-        Boolean(props.reducedMotion),
-        pingRef.current,
-        rulerRef.current,
-        dragPreviewRef.current
-      );
+      frame = 0;
+      if (disposed || !initialized) return;
+      for (const layer of layers.values()) for (const child of layer.removeChildren()) child.destroy({ children: true });
+      const { live } = current.current;
+      if (!live) return;
+      const map = live.mapAssetId ? textures.current.get(live.mapAssetId) : null;
+      const bounds = { width: map?.width ?? 1600, height: map?.height ?? 1000 };
+      const add = (layer: string, object: Container) => layers.get(layer)?.addChild(object);
+      add('background', new Graphics().rect(0, 0, bounds.width, bounds.height).fill('#22292b'));
+      if (map) add('background', new Sprite(map));
+      const grid = new Graphics();
+      const drawGrid = gridDrawModel(live.grid, bounds);
+      for (const line of drawGrid.square) grid.moveTo(line.a.x, line.a.y).lineTo(line.b.x, line.b.y);
+      for (const hex of drawGrid.hex) polygon(grid, hex.points);
+      grid.stroke({ width: 1 / camera.current.zoom, color: '#d4d7ce', alpha: live.grid.opacity }); add('grid', grid);
+      for (const region of live.terrain) { const terrain = new Graphics(); polygon(terrain, terrainPolygon(region)); terrain.fill({ color: '#87643c', alpha: 0.3 }); add('terrain', terrain); }
+      for (const template of live.templates) {
+        const shape = new Graphics();
+        if (template.kind === 'rectangle') shape.rect(template.origin.x, template.origin.y, template.length, template.width || template.length / 2);
+        else shape.circle(template.origin.x, template.origin.y, Math.max(20, template.length / 2));
+        shape.stroke({ width: 2, color: '#efd49a', alpha: 0.7 }); add('selection', shape);
+      }
+      for (const wall of live.walls) {
+        const door = live.doors.find(item => item.wallId === wall.id);
+        add('walls', new Graphics().moveTo(wall.a.x, wall.a.y).lineTo(wall.b.x, wall.b.y).stroke({ width: door ? 5 : 3, color: door?.state === 'open' ? '#6bb3a3' : door ? '#efbc60' : '#86959e', alpha: door?.state === 'open' ? 0.5 : 1 }));
+      }
+      for (const light of live.lights) if (light.enabled) add('lighting', new Graphics().circle(light.x, light.y, light.dim).fill({ color: light.color, alpha: 0.1 }));
+      for (const token of live.tokens) {
+        const at = drag?.id === token.id ? drag.at : token;
+        for (const aura of token.auras) add('auras', new Graphics().circle(at.x, at.y, aura.radius).stroke({ width: 2, color: aura.color, alpha: 0.5 }));
+        const art = token.assetId ? textures.current.get(token.assetId) : null;
+        const group = new Container(); group.position.set(at.x, at.y);
+        const radius = Math.max(12, token.width / 2);
+        group.addChild(new Graphics().circle(0, 0, radius).fill(token.disposition === 'enemy' ? '#bf6154' : '#4378a9').stroke({ width: 3, color: token.visibility === 'hidden' ? '#bd89d0' : '#efd49a' }));
+        if (art) { const sprite = new Sprite(art); sprite.anchor.set(0.5); sprite.width = token.width; sprite.height = token.height; group.addChild(sprite); }
+        if (token.nameplate) { const text = new Text({ text: token.name, style: { fontFamily: 'system-ui, sans-serif', fontSize: 13 / camera.current.zoom, fill: '#ffffff', stroke: { color: '#121519', width: 3 / camera.current.zoom } } }); text.anchor.set(0.5, 0); text.position.set(0, radius + 5 / camera.current.zoom); group.addChild(text); }
+        group.alpha = token.visibility === 'hidden' ? 0.55 : 1; add('tokens', group);
+      }
+      const nextFogKey = JSON.stringify([bounds, live.fog]);
+      if (nextFogKey !== fogKey) {
+        fogKey = nextFogKey;
+        fogTexture?.destroy(true);
+        composeFog(fogCanvas, live.fog, bounds);
+        fogTexture = Texture.from(fogCanvas);
+      }
+      if (fogTexture && live.fog.length) { const fog = new Sprite(fogTexture); fog.width = bounds.width; fog.height = bounds.height; fog.alpha = current.current.showHidden ? 0.35 : 1; add('fog', fog); }
+      for (const annotation of live.annotations) {
+        if (annotation.kind === 'text' && annotation.points[0]) { const text = new Text({ text: annotation.text, style: { fontFamily: 'system-ui', fontSize: 14, fill: annotation.color } }); text.position.set(annotation.points[0].x, annotation.points[0].y); add('annotations', text); }
+        else { const shape = new Graphics(); polygon(shape, annotation.points); shape.stroke({ width: 2, color: annotation.color }); add('annotations', shape); }
+      }
+      if (region) add('selection', new Graphics().rect(Math.min(region.a.x, region.b.x), Math.min(region.a.y, region.b.y), Math.abs(region.a.x - region.b.x), Math.abs(region.a.y - region.b.y)).fill({ color: region.kind === 'reveal' ? '#65b898' : '#cd8473', alpha: 0.2 }).stroke({ width: 2, color: '#efd49a' }));
+      for (const ping of current.current.pings ?? []) add('selection', new Graphics().circle(ping.x, ping.y, 18).stroke({ width: 3, color: '#efd49a' }));
+      if (current.current.ruler) { const { a, b } = current.current.ruler; add('selection', new Graphics().moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 2, color: '#efd49a' })); }
+      for (const layer of layers.values()) { layer.scale.set(camera.current.zoom); layer.position.set(-camera.current.x * camera.current.zoom, -camera.current.y * camera.current.zoom); }
+      app.canvas.dataset.cameraX = String(camera.current.x); app.canvas.dataset.cameraY = String(camera.current.y); app.canvas.dataset.zoom = String(camera.current.zoom);
+      app.canvas.dataset.mapWidth = String(bounds.width); app.canvas.dataset.mapHeight = String(bounds.height);
+      app.canvas.dataset.sequence = String(live.lastEventSequence); app.canvas.dataset.grid = live.grid.mode;
     }
-
     return () => {
-      cancelled = true;
-      const canvas = app.canvas as HTMLCanvasElement & { __onWheel?: (ev: WheelEvent) => void };
-      if (canvas.__onWheel) canvas.removeEventListener('wheel', canvas.__onWheel);
-      app.destroy();
-      appRef.current = null;
+      disposed = true; resizeObserver.disconnect(); cancelAnimationFrame(frame); window.removeEventListener('resize', schedule);
+      if (initialized) { app.canvas.removeEventListener('wheel', onWheel); app.destroy(true, { children: true }); }
+      fogTexture?.destroy(true); appRef.current = null; repaint.current = () => undefined;
     };
   }, []);
-
-  useEffect(() => {
-    if (!appRef.current) return;
-    renderScene(
-      layersRef.current,
-      props.live,
-      cameraRef.current,
-      Boolean(props.reducedMotion),
-      pingRef.current,
-      rulerRef.current,
-      dragPreviewRef.current
-    );
-  }, [props.live, props.camera, props.reducedMotion, props.pings, props.ruler]);
-
-  return <div ref={host} className="ap-vtt-canvas" data-testid="vtt-canvas" role="application" aria-label="Virtual tabletop" />;
+  useEffect(() => { repaint.current(); }, [props.live, props.camera, props.pings, props.ruler, props.showHidden]);
+  useEffect(() => () => { for (const texture of textures.current.values()) texture.destroy(true); textures.current.clear(); }, []);
+  return <div ref={host} className="ap-vtt-canvas" data-testid="vtt-canvas" role="application" aria-label="Virtual tabletop">{error ? <p role="alert" className="vtt-render-error">{error}</p> : null}</div>;
 }
 
-function poly(g: Graphics, points: { x: number; y: number }[]) {
-  if (points.length === 0) return;
-  g.moveTo(points[0]!.x, points[0]!.y);
-  for (let i = 1; i < points.length; i += 1) g.lineTo(points[i]!.x, points[i]!.y);
-  g.closePath();
+function polygon(graphics: Graphics, points: Point[]) {
+  if (!points.length) return;
+  graphics.moveTo(points[0]!.x, points[0]!.y);
+  for (const point of points.slice(1)) graphics.lineTo(point.x, point.y);
+  graphics.closePath();
 }
 
-function renderScene(
-  layers: Map<string, Container>,
-  live: ProjectedLiveScene | null,
-  camera: Camera | undefined,
-  reducedMotion: boolean,
-  pings: OverlayPing[],
-  ruler: OverlayRuler | null,
-  drag: { id: string; x: number; y: number } | null
-) {
-  for (const layer of layers.values()) layer.removeChildren();
-  if (!live) return;
-  const cam = clampCamera(camera ?? live.camera);
-
-  const background = new Graphics();
-  background.rect(0, 0, 1600, 1000);
-  background.setFillStyle({ color: 0x1a1c16 });
-  background.fill();
-  layers.get('background')?.addChild(background);
-  const map = assetUrl(live.mapAssetId);
-  if (map) {
-    const sprite = new Sprite(Texture.from(map));
-    sprite.width = 1600;
-    sprite.height = 1000;
-    layers.get('background')?.addChild(sprite);
-  }
-
-  const grid = new Graphics();
-  const model = gridDrawModel(live.grid);
-  if (model.mode === 'square') {
-    grid.setStrokeStyle({ width: 1, color: 0x3a3a3a, alpha: live.grid.opacity });
-    for (const line of model.square) grid.moveTo(line.a.x, line.a.y).lineTo(line.b.x, line.b.y);
-    grid.stroke();
-  } else if (model.mode === 'hex-flat' || model.mode === 'hex-pointy') {
-    grid.setStrokeStyle({ width: 1, color: 0x3a3a3a, alpha: live.grid.opacity });
-    for (const cell of model.hex) {
-      poly(grid, cell.points);
-    }
-    grid.stroke();
-  }
-  layers.get('grid')?.addChild(grid);
-
-  const terrain = new Graphics();
-  terrain.setFillStyle({ color: 0x4a3b1a, alpha: 0.35 });
-  for (const region of terrainDrawList(live.terrain)) {
-    poly(terrain, region.points);
-  }
-  terrain.fill();
-  layers.get('terrain')?.addChild(terrain);
-
-  const walls = new Graphics();
-  walls.setStrokeStyle({ width: 3, color: 0x88aadd });
-  for (const wall of live.walls) walls.moveTo(wall.a.x, wall.a.y).lineTo(wall.b.x, wall.b.y);
-  walls.stroke();
-  layers.get('walls')?.addChild(walls);
-
-  const lighting = new Graphics();
-  for (const light of live.lights) {
-    lighting.circle(light.x, light.y, light.dim);
-    lighting.setFillStyle({ color: 0xffe9a8, alpha: reducedMotion ? 0.08 : 0.12 });
-    lighting.fill();
-  }
-  layers.get('lighting')?.addChild(lighting);
-
-  const fog = new Graphics();
-  for (const op of fogDrawList(live.fog)) {
-    fog.setFillStyle({ color: 0x000000, alpha: op.kind === 'fog-hide' ? 0.55 : 0.28 });
-    poly(fog, op.points);
-    fog.fill();
-  }
-  layers.get('fog')?.addChild(fog);
-
-  const tokens = layers.get('tokens');
-  const auras = layers.get('auras');
-  for (const token of live.tokens) {
-    for (const aura of token.auras) {
-      const ag = new Graphics();
-      ag.circle(token.x, token.y, aura.radius);
-      ag.setStrokeStyle({ width: 1, color: 0x66ff99, alpha: 0.6 });
-      ag.stroke();
-      auras?.addChild(ag);
-    }
-    const g = new Graphics();
-    g.circle(token.x, token.y, Math.max(12, token.width / 2));
-    g.setFillStyle({ color: token.disposition === 'enemy' ? 0xc45c5c : 0x5c8ec4 });
-    g.fill();
-    g.eventMode = 'static';
-    g.cursor = 'pointer';
-    g.label = token.id;
-    tokens?.addChild(g);
-  }
-
-  const annotations = new Graphics();
-  annotations.setStrokeStyle({ width: 2, color: 0xf3f1ea });
-  for (const item of live.annotations) {
-    if (item.points.length >= 2) {
-      annotations.moveTo(item.points[0]!.x, item.points[0]!.y);
-      for (let i = 1; i < item.points.length; i += 1) annotations.lineTo(item.points[i]!.x, item.points[i]!.y);
-    } else if (item.points[0]) {
-      annotations.circle(item.points[0].x, item.points[0].y, 6);
-    }
-  }
-  annotations.stroke();
-  layers.get('annotations')?.addChild(annotations);
-
-  const selection = new Graphics();
-  selection.setStrokeStyle({ width: 1, color: 0xe2b14a, alpha: 0.8 });
-  for (const item of live.templates) {
-    if (item.kind === 'rectangle') {
-      selection.rect(item.origin.x, item.origin.y, item.length, item.width || item.length / 2);
-    } else {
-      selection.circle(item.origin.x, item.origin.y, Math.max(20, item.length / 2));
-    }
-  }
-  selection.stroke();
-  if (drag) {
-    selection.circle(drag.x, drag.y, 16);
-    selection.setStrokeStyle({ width: 2, color: 0xffffff, alpha: 0.9 });
-    selection.stroke();
-  }
-  if (ruler) {
-    selection.setStrokeStyle({ width: 2, color: 0xf3d27a });
-    selection.moveTo(ruler.a.x, ruler.a.y).lineTo(ruler.b.x, ruler.b.y);
-    selection.stroke();
-  }
-  for (const ping of pings) {
-    selection.circle(ping.x, ping.y, 18);
-    selection.setStrokeStyle({ width: 2, color: 0xff6688, alpha: 0.9 });
-    selection.stroke();
-  }
-  layers.get('selection')?.addChild(selection);
-
-  for (const layer of layers.values()) {
-    layer.scale.set(cam.zoom);
-    layer.position.set(-cam.x * cam.zoom, -cam.y * cam.zoom);
+/** Alpha composition, not even-odd holes: overlapping reveals stay revealed; hides win in order. */
+function composeFog(canvas: HTMLCanvasElement, ops: FogOperation[], bounds: { width: number; height: number }) {
+  const scale = Math.min(1, 4096 / Math.max(bounds.width, bounds.height));
+  canvas.width = Math.max(1, Math.ceil(bounds.width * scale)); canvas.height = Math.max(1, Math.ceil(bounds.height * scale));
+  const context = canvas.getContext('2d')!; context.scale(scale, scale); context.fillStyle = '#080b0f';
+  if (ops.length && ops[0]?.kind !== 'hide') context.fillRect(0, 0, bounds.width, bounds.height);
+  for (const op of ops) {
+    context.globalCompositeOperation = op.kind === 'reveal' ? 'destination-out' : 'source-over';
+    if (op.shape === 'full' || op.kind === 'reset') { context.fillRect(0, 0, bounds.width, bounds.height); continue; }
+    const points = fogPolygon(op); if (!points.length) continue;
+    context.beginPath(); context.moveTo(points[0]!.x, points[0]!.y);
+    for (const point of points.slice(1)) context.lineTo(point.x, point.y);
+    context.closePath(); context.fill();
   }
 }

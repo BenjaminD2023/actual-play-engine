@@ -1,44 +1,86 @@
-import { inflateSync } from 'node:zlib';
-import { ProtocolError } from '@actualplay/protocol';
+import { inflateRawSync } from 'node:zlib';
+import { PackError } from '@actualplay/protocol/production';
+
+const CRC_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i += 1) {
+  let c = i;
+  for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  CRC_TABLE[i] = c >>> 0;
+}
+
+export const MAX_FILE_BYTES = 25 * 1024 * 1024;
+export const MAX_TOTAL_BYTES = 80 * 1024 * 1024;
+
+export function crc32(buffer: Buffer): number {
+  let c = 0xffffffff;
+  for (const byte of buffer) c = CRC_TABLE[(c ^ byte) & 0xff]! ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
 
 export function assertSafeZipPath(name: string): string {
   const normalized = name.replace(/\\/g, '/');
   if (normalized.startsWith('/') || normalized.includes('..') || normalized.includes(':')) {
-    throw new ProtocolError('invalid_request', `Unsafe archive path: ${name}`);
+    throw new PackError('unsafe_archive', `Unsafe archive path: ${name}`);
   }
   return normalized;
 }
 
-export function extractZipEntries(buffer: Buffer): Array<{ name: string; data: Buffer }> {
-  const entries: Array<{ name: string; data: Buffer }> = [];
+export interface ZipEntry {
+  name: string;
+  data: Buffer;
+}
+
+export function extractZipEntries(buffer: Buffer): ZipEntry[] {
+  const entries: ZipEntry[] = [];
   let offset = 0;
+  let total = 0;
+  const names = new Set<string>();
   while (offset + 30 <= buffer.length) {
     const sig = buffer.readUInt32LE(offset);
     if (sig !== 0x04034b50) break;
+    const flags = buffer.readUInt16LE(offset + 6);
     const method = buffer.readUInt16LE(offset + 8);
+    if ((flags & 9) || (method !== 0 && method !== 8)) throw new PackError('invalid_pack', 'Unsupported ZIP encryption, descriptor or compression.');
     const compact = buffer.readUInt32LE(offset + 18);
     const nameLen = buffer.readUInt16LE(offset + 26);
     const extraLen = buffer.readUInt16LE(offset + 28);
-    const name = buffer.toString('utf8', offset + 30, offset + 30 + nameLen);
-    assertSafeZipPath(name);
+    const name = assertSafeZipPath(buffer.toString('utf8', offset + 30, offset + 30 + nameLen));
     const start = offset + 30 + nameLen + extraLen;
+    if (compact > MAX_FILE_BYTES) {
+      throw new PackError('invalid_pack', `Archive entry ${name} exceeds the 25MB file limit.`);
+    }
+    if (start + compact > buffer.length || start > buffer.length) throw new PackError('invalid_pack', 'Truncated ZIP entry.');
+    if (names.has(name)) throw new PackError('invalid_pack', `Duplicate archive path ${name}.`);
+    names.add(name);
     const stored = buffer.subarray(start, start + compact);
-    const data = method === 0 ? Buffer.from(stored) : inflateSync(stored);
+    let data: Buffer;
+    try { data = method === 0 ? Buffer.from(stored) : inflateRawSync(stored, { maxOutputLength: MAX_FILE_BYTES }); }
+    catch { throw new PackError('invalid_pack', 'Invalid or oversized compressed entry.'); }
+    if (data.length !== buffer.readUInt32LE(offset + 22) || crc32(data) !== buffer.readUInt32LE(offset + 14)) throw new PackError('checksum_mismatch', `ZIP checksum mismatch for ${name}.`);
+    if (data.byteLength > MAX_FILE_BYTES) {
+      throw new PackError('invalid_pack', `Archive entry ${name} exceeds the 25MB file limit.`);
+    }
+    total += data.byteLength;
+    if (total > MAX_TOTAL_BYTES) {
+      throw new PackError('invalid_pack', 'Archive exceeds the 80MB unpacked limit.');
+    }
     if (!name.endsWith('/')) entries.push({ name, data });
     offset = start + compact;
+  }
+  if (entries.length === 0) {
+    throw new PackError('invalid_pack', 'Archive contains no files.');
   }
   return entries;
 }
 
-export function createZip(entries: Array<{ name: string; data: Buffer }>): Buffer {
+export function createZip(entries: ZipEntry[]): Buffer {
   const locals: Buffer[] = [];
   const centrals: Buffer[] = [];
   let offset = 0;
   for (const entry of entries) {
-    const name = assertSafeZipPath(entry.name);
-    const nameBuf = Buffer.from(name, 'utf8');
+    const name = Buffer.from(assertSafeZipPath(entry.name), 'utf8');
     const crc = crc32(entry.data);
-    const local = Buffer.alloc(30 + nameBuf.length);
+    const local = Buffer.alloc(30 + name.length + entry.data.length);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(0, 6);
@@ -48,11 +90,13 @@ export function createZip(entries: Array<{ name: string; data: Buffer }>): Buffe
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(entry.data.length, 18);
     local.writeUInt32LE(entry.data.length, 22);
-    local.writeUInt16LE(nameBuf.length, 26);
+    local.writeUInt16LE(name.length, 26);
     local.writeUInt16LE(0, 28);
-    nameBuf.copy(local, 30);
+    name.copy(local, 30);
+    entry.data.copy(local, 30 + name.length);
+    locals.push(local);
 
-    const central = Buffer.alloc(46 + nameBuf.length);
+    const central = Buffer.alloc(46 + name.length);
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
@@ -63,40 +107,28 @@ export function createZip(entries: Array<{ name: string; data: Buffer }>): Buffe
     central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(entry.data.length, 20);
     central.writeUInt32LE(entry.data.length, 24);
-    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt16LE(name.length, 28);
     central.writeUInt16LE(0, 30);
     central.writeUInt16LE(0, 32);
     central.writeUInt16LE(0, 34);
     central.writeUInt16LE(0, 36);
     central.writeUInt32LE(0, 38);
     central.writeUInt32LE(offset, 42);
-    nameBuf.copy(central, 46);
-
-    locals.push(local, entry.data);
+    name.copy(central, 46);
     centrals.push(central);
-    offset += local.length + entry.data.length;
+    offset += local.length;
   }
-  const localPart = Buffer.concat(locals);
-  const centralPart = Buffer.concat(centrals);
+
+  const centralStart = offset;
+  const centralSize = centrals.reduce((sum, buf) => sum + buf.length, 0);
   const eocd = Buffer.alloc(22);
   eocd.writeUInt32LE(0x06054b50, 0);
   eocd.writeUInt16LE(0, 4);
   eocd.writeUInt16LE(0, 6);
   eocd.writeUInt16LE(entries.length, 8);
   eocd.writeUInt16LE(entries.length, 10);
-  eocd.writeUInt32LE(centralPart.length, 12);
-  eocd.writeUInt32LE(localPart.length, 16);
+  eocd.writeUInt32LE(centralSize, 12);
+  eocd.writeUInt32LE(centralStart, 16);
   eocd.writeUInt16LE(0, 20);
-  return Buffer.concat([localPart, centralPart, eocd]);
-}
-
-function crc32(buf: Buffer): number {
-  let crc = 0xffffffff;
-  for (const byte of buf) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
+  return Buffer.concat([...locals, ...centrals, eocd]);
 }

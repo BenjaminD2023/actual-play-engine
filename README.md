@@ -195,3 +195,9 @@ The engine cannot certify QLab, the network, or macOS. It can refuse to claim th
 
 - VTT: [architecture](docs/VTT_ARCHITECTURE.md), [protocol](docs/VTT_PROTOCOL.md), [security](docs/VTT_SECURITY.md), [operations](docs/VTT_OPERATIONS.md), and [testing](docs/VTT_TESTING.md)
 - Production Maker: [architecture](docs/PRODUCTION_MAKER_ARCHITECTURE.md), [actions](docs/PRODUCTION_ACTIONS.md), [security](docs/PRODUCTION_MAKER_SECURITY.md), [operations](docs/PRODUCTION_MAKER_OPERATIONS.md), and [testing](docs/PRODUCTION_MAKER_TESTING.md)
+
+## Native sample integration
+
+The local `feat/native-vtt` integration exposes framework-neutral HTTP handlers from `@actualplay/engine/vtt` and `@actualplay/engine/production`. The Next adapter is a compatibility wrapper. Maker and Engine share the browser-safe `@actualplay/protocol/production` contract; no QLab credentials belong in it.
+
+`npm run build:libs` builds the shared protocol, engine, Next adapter and Pixi canvas without building a reference app. Use matching engine, maker and sample checkouts. The sample README documents the complete workflow and tests. Public event readers must supply the viewer actor to `eventsSince`; omitting it is for trusted internal replay only.

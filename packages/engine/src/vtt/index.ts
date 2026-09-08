@@ -10,3 +10,5 @@ export { RulesRegistry, genericAdapter, d20Adapter } from './rules.js';
 export { AssetService, detectMime } from './assets.js';
 export { exportScenePackage, importScenePackage, extractZipEntries, assertSafeZipPath } from './pack.js';
 export { emptyDocument, liveFromDocument, makeToken } from './model.js';
+
+export { handleVttRequest } from './http.js';

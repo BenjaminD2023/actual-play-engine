@@ -70,6 +70,20 @@ export class ProductionRuntime {
       throw new ProductionError('invalid_pack', 'Archive must contain manifest.json and project.json.');
     }
     const manifest = parseManifest(JSON.parse(manifestEntry.data.toString('utf8')));
+    const checksumsEntry = entries.find(entry => entry.name === 'checksums.json');
+    if (checksumsEntry) {
+      let checksums: Record<string, unknown>;
+      try { checksums = JSON.parse(checksumsEntry.data.toString('utf8')) as Record<string, unknown>; }
+      catch { throw new ProductionError('checksum_mismatch', 'Invalid checksums.json.'); }
+      if (!checksums || typeof checksums !== 'object' || Array.isArray(checksums)) throw new ProductionError('checksum_mismatch', 'Invalid checksums.json.');
+      for (const entry of entries) {
+        if (entry.name === 'checksums.json') continue;
+        if (checksums[entry.name] !== createHash('sha256').update(entry.data).digest('hex')) throw new ProductionError('checksum_mismatch', `Checksum mismatch for ${entry.name}.`);
+      }
+      for (const name of Object.keys(checksums)) if (!entries.some(entry => entry.name === name)) throw new ProductionError('checksum_mismatch', `Missing archive entry ${name}.`);
+    } else if (!manifest.checksum) {
+      throw new ProductionError('checksum_mismatch', 'Pack is missing checksums.json.');
+    }
     const project = parseProject(JSON.parse(projectEntry.data.toString('utf8')));
     const packedAssets: PackedAsset[] = [];
     for (const asset of [...manifest.assets, ...project.assets]) {
@@ -311,7 +325,21 @@ export class ProductionRuntime {
     });
   }
 
-  async executeAction(
+  private pendingRuns = new Map<string, { key: string; promise: Promise<ActionRun> }>();
+
+  async executeAction(deploymentId: string, actionId: string, actor: ActorContext | { userId?: string | null; role: string }, runId = createId()): Promise<ActionRun> {
+    const key = JSON.stringify([deploymentId, actionId, actor.userId, actor.role]);
+    const pending = this.pendingRuns.get(runId);
+    if (pending) {
+      if (pending.key !== key) throw new ProductionError('invalid_request', 'Action run id reused with different input.');
+      return pending.promise;
+    }
+    const promise = Promise.resolve().then(() => this.executeActionNow(deploymentId, actionId, actor, runId));
+    this.pendingRuns.set(runId, { key, promise });
+    try { return await promise; } finally { this.pendingRuns.delete(runId); }
+  }
+
+  private async executeActionNow(
     deploymentId: string,
     actionId: string,
     actor: ActorContext | { userId?: string | null; role: string },
@@ -322,7 +350,10 @@ export class ProductionRuntime {
     this.assertCanExecute(deploymentId, resolved);
     if (runId) {
       const existing = this.tables.getRun(runId);
-      if (existing) return existing;
+      if (existing) {
+        if (existing.deploymentId !== deploymentId || existing.actionId !== actionId || existing.actorId !== resolved.userId) throw new ProductionError('invalid_request', 'Action run id belongs to another input or actor.');
+        return existing;
+      }
     }
     const deployment = this.requireDeployment(deploymentId);
     const revision = this.requireRevision(deployment.packageRevisionId);
@@ -567,7 +598,7 @@ export class ProductionRuntime {
         map = { packSceneId: scene.id, vttSceneId, vttInstanceId: instanceId };
         this.tables.putSceneMap(deploymentId, map);
       }
-      if (activate && map.vttInstanceId) {
+      if (activate && scene.id === revision.project.scenes[0]?.id && map.vttInstanceId) {
         await this.engine.vtt.execute(
           {
             id: createId(),
@@ -616,7 +647,12 @@ export class ProductionRuntime {
       unitsPerCell: scene.grid.unitsPerCell,
       unitName: scene.grid.unitName,
     };
-    const walls = [];
+    const walls: SceneDocument['walls'] = scene.annotations.filter(isWallAnnotation).flatMap((annotation) =>
+      annotation.points.slice(1).map((point, i) => ({
+        id: `wall:${annotation.id}:${i}`, a: annotation.points[i]!, b: point,
+        blockingVision: true, blockingMovement: true, dmOnly: annotation.dmOnly, kind: 'wall' as const,
+      }))
+    );
     const doors = [];
     for (const door of scene.doors) {
       const wallId = `wall:${door.id}`;
@@ -697,7 +733,8 @@ export class ProductionRuntime {
         camera: { x: camera.x, y: camera.y, zoom: camera.zoom, rotation: 0 },
         audience: camera.audience,
       })),
-      annotations: scene.annotations.map((ann) => ({
+      fog: scene.fogRegions.map(region => ({ id: region.id, kind: region.kind, shape: region.shape, points: region.points, createdAt: nowIso(), actorId: null })),
+      annotations: scene.annotations.filter((ann) => !isWallAnnotation(ann)).map((ann) => ({
         id: ann.id,
         kind: ann.kind === 'arrow' ? 'arrow' : 'text',
         points: ann.points,
@@ -1255,12 +1292,18 @@ export function exportProductionPack(project: ProductionProject, assets: PackedA
   const entries = [
     { name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest, null, 2), 'utf8') },
     { name: 'project.json', data: Buffer.from(JSON.stringify(parsed), 'utf8') },
-    ...packed.map((asset) => ({ name: `assets/${asset.hash}`, data: asset.data })),
+    ...packed.map((asset) => ({ name: `assets/${asset.id}`, data: asset.data })),
   ];
+  const checksums = Object.fromEntries(entries.map((entry) => [entry.name, createHash('sha256').update(entry.data).digest('hex')]));
+  entries.push({ name: 'checksums.json', data: Buffer.from(JSON.stringify(checksums)) });
   return createZip(entries);
 }
 
 function tablesFor(engine: ActualPlayEngine): ProductionTables {
   if (engine.store instanceof SqliteStore) return new SqliteProductionTables(engine.store.database);
   return new MemoryProductionTables();
+}
+
+function isWallAnnotation(annotation: SceneRecord['annotations'][number]): boolean {
+  return annotation.kind === 'wall' || (annotation.kind === 'shape' && annotation.text === 'wall');
 }

@@ -119,12 +119,12 @@ export function terrainDrawList(regions: TerrainRecord[]): DrawPoly[] {
   return regions.map((region) => ({ points: terrainPolygon(region), kind: 'terrain' }));
 }
 
-export function gridDrawModel(grid: GridConfig): { mode: GridConfig['mode']; hex: ReturnType<typeof hexCellCenters>; square: ReturnType<typeof squareGridLines> } {
+export function gridDrawModel(grid: GridConfig, bounds = { width: 1600, height: 1000 }): { mode: GridConfig['mode']; hex: ReturnType<typeof hexCellCenters>; square: ReturnType<typeof squareGridLines> } {
   if (grid.mode === 'hex-flat' || grid.mode === 'hex-pointy') {
-    return { mode: grid.mode, hex: hexCellCenters(grid), square: [] };
+    return { mode: grid.mode, hex: hexCellCenters(grid, bounds), square: [] };
   }
   if (grid.mode === 'square') {
-    return { mode: 'square', hex: [], square: squareGridLines(grid) };
+    return { mode: 'square', hex: [], square: squareGridLines(grid, bounds) };
   }
   return { mode: 'gridless', hex: [], square: [] };
 }

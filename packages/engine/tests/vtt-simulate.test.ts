@@ -236,7 +236,7 @@ describe('simulate-vtt production scenario', () => {
 
     const fogBefore = h.vtt.tables.getInstance(instanceId)!.state.fog.length;
     await h.vtt.execute(
-      { ...h.cmd('fog.reveal', { shape: 'rect', points: [{ x: 10, y: 10 }, { x: 80, y: 80 }] }), sceneInstanceId: instanceId },
+      { ...h.cmd('fog.reveal', { shape: 'rect', points: [{ x: 10, y: 10 }, { x: 160, y: 80 }] }), sceneInstanceId: instanceId },
       h.dm
     );
     mark(41, h.vtt.tables.getInstance(instanceId)!.state.fog.length > fogBefore, 'reveal fog');

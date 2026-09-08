@@ -139,11 +139,34 @@ export class VttRuntime {
     return omitSecretsFromJson(snap, actor.viewer) as VttSnapshot;
   }
 
-  eventsSince(sessionId: string, after: number): DurableEvent[] {
-    return this.tables.listEvents(sessionId, after);
+  eventsSince(sessionId: string, after: number, actor?: ActorContext): DurableEvent[] {
+    if (!Number.isSafeInteger(after) || after < 0) throw new ProtocolError('invalid_request', 'Invalid event cursor.');
+    const events = this.tables.listEvents(sessionId, after);
+    if (!actor || actor.capabilities.includes('viewHiddenToken')) return events;
+    // Preserve consecutive sequence numbers but expose invalidations, not private mutation payloads.
+    return events.map(event => ({ ...event, aggregateId: 'projected', actorId: null, payload: {} }));
   }
 
+  canReadAsset(sessionId: string, assetId: string, actor: ActorContext): boolean {
+    return actor.capabilities.includes('manageAssets') || this.snapshot(sessionId, actor).assets.some(asset => asset.id === assetId);
+  }
+
+  private pendingCommands = new Map<string, { key: string; promise: Promise<CommandOutcome> }>();
+
   async execute(raw: unknown, actor: ActorContext): Promise<CommandOutcome> {
+    const envelope = parseCommandEnvelope(raw);
+    const key = hashRequest(envelope.type, envelope.sessionId, { sceneInstanceId: envelope.sceneInstanceId ?? null, payload: envelope.payload, actorId: actor.userId, role: actor.role, viewer: actor.viewer });
+    const pending = this.pendingCommands.get(envelope.id);
+    if (pending) {
+      if (pending.key !== key) throw new ProtocolError('duplicate_command', 'In-flight command id reused with different input or actor.');
+      return { ...await pending.promise, duplicate: true };
+    }
+    const promise = Promise.resolve().then(() => this.executeNow(raw, actor));
+    this.pendingCommands.set(envelope.id, { key, promise });
+    try { return await promise; } finally { this.pendingCommands.delete(envelope.id); }
+  }
+
+  private async executeNow(raw: unknown, actor: ActorContext): Promise<CommandOutcome> {
     if (!this.enabled) throw new ProtocolError('unavailable', 'VTT is disabled on this engine.');
     if (isReadOnlyViewer(actor.viewer) && typeof raw === 'object' && raw && 'type' in raw) {
       const type = String((raw as { type: string }).type);
@@ -152,9 +175,10 @@ export class VttRuntime {
       }
     }
     const envelope = parseCommandEnvelope(raw);
-    const requestHash = hashRequest(envelope.type, envelope.sessionId, envelope.payload);
+    const requestHash = hashRequest(envelope.type, envelope.sessionId, { sceneInstanceId: envelope.sceneInstanceId ?? null, payload: envelope.payload });
     const existing = this.tables.getDurableCommand(envelope.id);
     if (existing) {
+      if (existing.actor_id !== actor.userId || existing.source !== actor.role) throw new ProtocolError('forbidden', 'Command belongs to another actor.');
       if (existing.request_hash !== requestHash) {
         throw new ProtocolError('duplicate_command', 'Command id reused with a different body.');
       }
@@ -546,7 +570,8 @@ export class VttRuntime {
 
   private setInstanceStatus(envelope: CommandEnvelope, actor: ActorContext, status: 'staged' | 'live', cap: 'stageScene' | 'activateScene'): CommandOutcome {
     assertCapability(actor.capabilities, cap);
-    const instance = this.requireInstance(envelope);
+    const target = typeof envelope.payload.instanceId === 'string' ? envelope.payload.instanceId : envelope.sceneInstanceId;
+    const instance = this.requireInstance({ ...envelope, sceneInstanceId: target });
     if (status === 'live') {
       for (const other of this.tables.listInstances(envelope.sessionId)) {
         if (other.id !== instance.id && other.status === 'live') {
@@ -555,8 +580,10 @@ export class VttRuntime {
       }
     }
     const updated = this.tables.putInstance({ ...instance, status, updated_at: stamp(), version: instance.version + 1 });
-    this.append(envelope, actor, updated.id, updated.version, status === 'live' ? 'vtt.scene.activated' : 'vtt.scene.staged', { instanceId: updated.id });
-    return { ok: true, version: updated.version, result: { instance: updated } };
+    const event = this.append(envelope, actor, updated.id, updated.version, status === 'live' ? 'vtt.scene.activated' : 'vtt.scene.staged', { instanceId: updated.id });
+    updated.last_event_sequence = event.sequence;
+    this.tables.putInstance(updated);
+    return { ok: true, version: updated.version, sequence: event.sequence, result: { instance: updated } };
   }
 
   private archiveScene(envelope: CommandEnvelope, actor: ActorContext): CommandOutcome {
@@ -629,8 +656,8 @@ export class VttRuntime {
       } else if (envelope.type === 'fog.undo') {
         state.fog = state.fog.slice(0, -1);
       } else if (envelope.type === 'fog.compact') {
-        const last = state.fog.at(-1);
-        state.fog = last ? [last] : [];
+        const lastReset = state.fog.map(op => op.kind).lastIndexOf('reset');
+        if (lastReset >= 0) state.fog = state.fog.slice(lastReset);
       } else {
         state.fog.push({
           id: createId(),
@@ -1319,6 +1346,7 @@ export class VttRuntime {
     const id = envelope.sceneInstanceId ?? fromPayload ?? this.tables.liveInstance(envelope.sessionId)?.id;
     const instance = id ? this.tables.getInstance(id) : null;
     if (!instance) throw new ProtocolError('scene_not_active', 'No live or targeted scene instance.');
+    if (instance.session_id !== envelope.sessionId) throw new ProtocolError('forbidden', 'Scene instance belongs to another session.');
     return instance;
   }
 

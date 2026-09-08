@@ -23,9 +23,15 @@
     "dev:production-runtime": "npm run dev --prefix ../actual-play-production-maker -w @actualplay/production-runtime-reference",
     "simulate-production-pack": "npm run test -w @actualplay/engine -- tests/production-action.test.ts",
     "verify:production-maker": "npm run test -w @actualplay/engine -- tests/production-import.test.ts tests/production-action.test.ts tests/production-qlab-unconfirmed.test.ts",
-    "verify": "npm run build && npm run lint && npm test && npm run simulate-show && npm run simulate-vtt && npm run test:e2e && npm run verify:production-maker"
+    "verify": "npm run build && npm run lint && npm test && npm run simulate-show && npm run simulate-vtt && npm run test:e2e && npm run verify:production-maker",
+    "build:libs": "npm run build -w @actualplay/protocol && npm run build -w @actualplay/engine && npm run build -w @actualplay/next && npm run build -w @actualplay/vtt"
   },
   "engines": {
     "node": ">=18.18.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "bcrypt@6.0.0": true,
+    "esbuild@0.28.2": true
   }
 }
