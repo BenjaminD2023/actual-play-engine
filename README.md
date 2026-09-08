@@ -49,7 +49,7 @@ export const { GET, POST, PUT, PATCH, DELETE } = createActualPlayHandlers(engine
 export { actualPlayMiddleware as middleware } from '@actualplay/next';
 ```
 
-A sibling reference show lives at `/Users/benjamin/actual-play-sample` (not in this repo).
+A sibling reference show lives at [actual-play-sample](https://github.com/BenjaminD2023/actual-play-sample) ([repo page](https://benjamind2023.github.io/actual-play-sample/)).
 
 Until you publish, depend on the local packages:
 
